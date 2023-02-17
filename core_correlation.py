@@ -38,6 +38,8 @@ def correlation_core(DM, bbdata_A, bbdata_B, T_A, Window, R, calc_results,index_
             assert(2*rotation_rate*Window[i,j]/c_light<2.56) #us
             #or equivalently assert w_ij<.85 sec
 
+            #################################################
+            ### Calculate scanning window for A and B #######
             geodelay_0 = calcresults.retarded_baseline_delay(ant1=index_A,  
                         ant2=index_B,
                         time=T_A[i,j],
@@ -53,6 +55,10 @@ def correlation_core(DM, bbdata_A, bbdata_B, T_A, Window, R, calc_results,index_
 
             ## assuming some def time_slice(data,start time, end time) 
             bbdata_A_clipped=time_slice(bbdata_A,T_A[i,j],T_A[i,j]+Window[i,j])
+            
+            
+            #################################################
+            ############ Fringestop bbdata_B  ###############
             
             ## fringestop bbdata B to nearest integer frame (the scan window should be short enough so that int_geodelay_0 is constant within the time chunk) 
             bbdata_B_clipped=time_slice(tstart_b,tstart_b+Window[i,j])
@@ -73,23 +79,25 @@ def correlation_core(DM, bbdata_A, bbdata_B, T_A, Window, R, calc_results,index_
             bbdata_B_clipped=bbdata_B_clipped* np.exp(1j * subint_delay_phase)
             ## will add fractional sample correction later
 
+            
             #################################################
             ### It's now intrachannel de-dispersion Time. ###
             bbdata_A_dedispersed=coherent_dedisp(bbdata_A, DM)
             bbdata_B_dedispersed=coherent_dedisp(bbdata_B, DM)
 
+            
             #######################################################
             ### Now that the pulses are centered at zero, calculate
-            ### the start and stop time indices for on signal ######
+            ### the start and stop time indices for on-signal ######
 
             on_signal_start=center_scan_time-R[i,j]*int(Window[i,j]/ 2.56)/2
             on_signal_stop=center_scan_time+R[i,j]*int(Window[i,j]/ 2.56)/2
 
-
             bbdata_A_signal_on=bbdata_A_dedispersed[:,:,on_signal_start:on_signal_stop]
             bbdata_B_signal_on=bbdata_B_dedispersed[:,:,on_signal_start:on_signal_stop]
             
-            
+            #######################################################
+            ########## cross-correlate the on-signal ##############
             for pol_1 in pols:  
                 autos_A[pointing,:, j, pol_1, pol_1, :] = ifft(fft(bbdata_A_signal_on[pol_1],bbdata_A_signal_on[pol_1],axis=-1)
                 autos_B[pointing,:, j, pol_1, pol_1, :] = ifft(fft(bbdata_B_signal_on[pol_1],bbdata_B_signal_on[pol_1],axis=-1)
