@@ -4,7 +4,7 @@ Written by Calvin Leung
 
 To define a set of scans, we must start by defining the start of a single on gate at some frequency -- call this t0 at f0 on some baseline b0.
 
-We need to define how to extrapolate t0 as a function of baseline, frequency, and time. For each baseline, we need to have a lattice of scan start times of shape (N_freq, N_scans). Note that N_freq will vary from baseline to baseline because of different frequency coverage. The dump might also be of different length at the different stations so N_scans might be different for different baselines. However, no matter what we do, at the end of the day, we will have N_baseline lattices of shape N_freq, N_scans. The lattice defines the start of the scan as evaluated at station A.
+We need to define how to extrapolate t0 as a function of baseline, frequency, and time. For each baseline, we need to have a lattice of scan start times of shape (N_freq, N_scans). Note that N_freq will vary from baseline to baseline because of different frequency coverage. The dump might also be of different length at the different stations so N_scans might be different for different baselines. However, no matter what we do, at the end of the day, we will have N_baseline lattices of shape N_freq, N_scans. The lattice defines the start of the scan as evaluated at station A. Since time does not need to be defined better than 2.56 us, we will represent all times as 64-bit floats.
 
 Let's start by doing all the scans for one baseline, then extrapolate to the other baselines.
 
@@ -24,50 +24,202 @@ Now we have t_ij, the start time as a function of time and frequency for a singl
     - The only reasonable scheme I can imagine is having w_ij = w_i. 
     - Warn the user if w_i > P_i (i.e. the scans overlap).
     - Warn the user if w_i < intrachannel smearing time (K_DM * DM * df / f**3)
+    - Add as an option to round w_i to the next_fast_len in scipy.fft (for faster FFTs)
 
-Finally, we need to know the "subintegration" period. After coherently dedispersing the scan, between t_ij and t_ij + w_ij, we need to know what part of the data to actually integrate. I think a reasonable way to paramterize this is with two numbers r_ij < s_ij. If r_ij = 0 and s_ij = 1, then we integrate the whole scan. If r_ij and s_ij are other numbers, we integrate up over part of the scan only (to select the pulse).
-    - Warn the user if w_i * (s_ij - r_ij) is not an integer power of 2 (for fast FFTs).
+Finally, we need to know the "subintegration" period. After coherently dedispersing the scan, between t_ij and t_ij + w_ij, we need to know what part of the data to actually integrate. I think a reasonable way to paramterize this is with a number 0 < r_ij < 1. After coherent dedispersion, we integrate over the range t_ij + w_i/2 +- r_ij / 2 (i.e. about the central part of the scan). 
+    - Warn the user if w_i * r_ij is not an integer power of 2 (for fast FFTs).
+    - Add as an option to round w_i * r_ij to the next_fast_len in scipy.fft (for faster FFTs)
 
-Now we have t_ij and w_ij for one baseline. How do we get the others? They have different frequency coverage, and different time coverage. But really, all we need is to extrpolate t00 for one baseline to get t00 for another baseline, and then run the above algorithm. 
-We can use difxcalc's baseline_delay function evaluated at t00 to calculate the delay between station a and station c. Then we apply the above logic to baseline cd. Note that the widths remain the same.
-
-
+Now we have t_ij and w_ij for one baseline. How do we get the other baselines? They have different frequency coverage, and different time coverage. But really, all we need is to extrpolate t00 for one baseline to get t00 for another baseline, and then run the above algorithm. 
+We can use difxcalc's baseline_delay function evaluated at t00 to calculate the delay between station a and station c. Then we apply the above logic to baseline cd. We ignore retarded baseline effects in this calculation but those are much smaller than the time resolution anyway.
 """
+
+import numpy as np
+from scipy.fft import fft, ifft, next_fast_len
+from astropy.time import Time
+
+from difxcalc_wrapper import io, runner, telescopes
+from difxcalc_wrapper.config import DIFXCALC_CMD
+from baseband_analysis.core import BBData
+
+K_DM = 1 / 2.41e-4  # in s MHz^2 / (pc cm^-3)
+
+class CorrJob():
+    def __init__(self,bbdata_list):
+        """Set up the correlation job:
+        Given a set of BBData objects, calculate N * (N-1) / 2 baselines.
+        For each baseline, define t_ij, w_ij, and r_ij into arrays of shape (N_baseline, N_freq, N_time) by calling define_scan_params().
+        Use run_difxcalc and save to self.calcresults so we only call difxcalc ONCE in the whole correlator job.
+        """
+
+        self.telescopes = []
+        for d in bbdata_list:
+            self.telescopes.append(telescope_from_bbdata(d))# need to implement something that figures out what telescopes from the bbdata object...probably do something like BBData.index_map['input'] and figure it out.
+        assert np.isclose(bbdata_list[0]['tiedbeam_locations']['ra'][:],d['tiedbeam_locations']['ra'][:]).all(),"ra values different, cannot correlate these datasets."
+        assert np.isclose(bbdata_list[0]['tiedbeam_locations']['dec'][:],d['tiedbeam_locations']['dec'][:]).all(), "dec values different, cannot correlate these datasets."
+        
+        self.ra = bbdata_a['tiedbeam_locations']['ra'][:]
+        self.dec = bbdata_a['tiedbeam_locations']['dec'][:]
+
+        phase_centers = [
+            ac.SkyCoord(ra=ra * un.deg, dec=dec * un.deg)
+            for r, d in zip(R.flatten(), D.flatten())
+        ]
+        start_time = np.min(bbdata_a['time0']['ctime'][:])
+        duration_sec = np.max(bbdata_a['time0']['ctime'][:]) - np.min(bbdata_a['time0']['ctime'][:]) + bbdata_a.ntime + bbdata_b.ntime # upper bound
+
+        _ = io.make_calc(
+            telescopes,
+            phase_centers,
+            start_time,
+            duration_sec=int(duration_sec),
+            ofile_name=calcfile,
+        )
+        self.calcresults = runner.run_difxcalc(
+            calcfile,
+            sources=phase_centers,
+            telescopes=telescopes,
+            force=True,
+            remove_calcfile=False,
+            difxcalc_cmd=DIFXCALC_CMD,
+        )
+
+        tau_at_time0 = self.calcresults.baseline_delay(
+                ant1=ii_a,
+                ant2=ii_b,
+                time=Time(unix_a, format="unix"),
+                src=src,  # should be a 1 time value x 1 pointing evaluation
+            )
+
+    def define_scan_params(t00: float, period_i, freq_offset_mode: str, time_offset_mode: str, **kwargs):
+        freq = np.linspace(800,400,num = 1024, endpoint=False)
+        t_ij = []
+        r_ij = []
+        w_ij = []
+
+        for baseline in self.baselines:
+            if freq_offset_mode == 'dm':
+                _ti0 = ti0_from_t00_dm(t00,**kwargs['dm'],**kwargs['f0'])
+            if freq_offset_mode == 'bbdata':
+                _ti0 = _ti0_from_t00_bbdata
+            _tij = tij_from_ti0_period(ti0, period_i, bbdata_a, bbdata_b)
+            _rij = np.ones_like(_tij)
+            _wij = wij(t_ij,r_ij,dm = dm)
+        
+        return t_ij, r_ij, w_ij
+            
+    def ti0_from_t00_dm(t00,f0,dm,fi):
+        ti0 = t00 + K_DM * dm * (fi**-2 - f0**-2) # for fi = infinity, ti0 < t00.
+        return ti0
+
+    def ti0_from_t00_bbdata(bbdata_a,bbdata_b):
+        unix_a = np.zeros(1024)
+        unix_b = np.zeros(1024)
+        unix_a[bbdata_a.index_map['freq']['id']] = bbdata_a['time0']['ctime'][:]
+        unix_b[bbdata_b.index_map['freq']['id']] = bbdata_b['time0']['ctime'][:]
+
+        ti0 = np.max(unix_a + tau_at_time0,unix_b) # use this if we fringestop A
+        # ti0 = np.max(unix_a ,unix_b - tau_at_time0) # use this if we fringestop B
+        # also might need to change the + to a - or vice versa
+        return ti0
+        
+    def ti0_at_other_station(telescope):
+        self.calcresults.baseline_delay(ant1 = ii_ref, ant2 = index(telescope), time = ti0, src=self.src)
+
+    def tij_from_ti0_period(ti0,period_i,bbdata_a,bbdata_b):
+        """
+        ti0 : float64
+            Containing start times at station A, good to 2.56 us.
+        period_i : float or 1d-array
+            Spacing between successive scans.
+        bbdata_a : BBData object.
+        """
+        period_i = np.atleast_1d(period_i)
+        valid_a = bbdata_a['time0']['ctime'][:] + 2.56e-6 * bbdata_a.ntime - ti0
+        valid_b = bbdata_b['time0']['ctime'][:] + 2.56e-6 * bbdata_b.ntime
+        n_time = np.minimum(valid_a,valid_b) / period_i
+        tij = ti0[:,None] + np.arange(n_time)[None,:] * period_i[:,None]
+        return tij
+        
+    def wij(t_ij, r_ij, dm = None): # same for every baseline
+        freq = np.linspace(800,400,num = 1024, endpoint = False) # no nyquist freq
+        w_ij = np.diff(t_ij,axis = -1) # the duration is equal to p_i by default
+        if DM is not None: # check that wij exceeds smearing time
+            smearing_time = K_DM * DM * 0.390625 / freq**3
+            assert (np.max(w_ij,axis = -1) > smearing_time).all() # check all frequency channels
+
+    def run_correlator_job(t_ij, w_ij, r_ij):
+        output = VLBIVis()
+        for b in baselines: # calculate cross-correlations
+            for f in freq:
+                answer = correlator_core(bbdata_a, bbdata_b, t_ij, w_ij, r_ij, freq_id = i) # run in series over time
+                output._from_ndarray_baseline(output, freq_sel = slice(i,i+1)
+        for s in stations: # calculate auto-correlations
+            for f in freq:
+                answer = calculate_autos(bbdata_s)
+                output._from_ndarray_station(answer, freq_sel = slice(i,i+1))
+
+        return output
+
+
+    def run_correlator_job_multiprocessing(t_ij, w_ij, r_ij):
+        output = VLBIVis()
+        for b in baselines:
+            for f in freq, but parallelized:
+                answer = correlator_core(bbdata_a, bbdata_b, t_ij, w_ij, r_ij, freq_id = i) # run in series over time
+                output._from_ndarray_station(answer, freq_sel = slice(i,i+1))
+                # NEED SOME PARALLEL WRITER HERE
+            # OR A CONCATENATE OVER FREQUENCY STAGE HERE
+        
+        for s in stations: # calculate auto-correlations
+            for f in freq, but parallelized:
+                _out_this_bl = VLBIVis()
+                answer = calculate_autos(bbdata_s)
+                output._from_ndarray_station(answer, freq_sel = slice(i,i+1))
+                # NEED SOME PARALLEL WRITER HERE
+                deep_group_copy(_out_this_bl, output)
+            # OR A CONCATENATE OVER FREQUENCY STAGE HERE
+        return output
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        "Module for extracting delays out of maser signal. Works with data extracted by maser_extraction.py and writes delays back to the same .h5 file. Reasonable usage: python maser_delays.py /path/to/maser_data.h5"
+        """Module for doing VLBI. In a python script, you can run:
+        job = CalcJob()
+
+        # steady source: Use a duty cycle of 1 (width = 1) and integrate over the full gate (subwidth = 1)
+        t_ij, w_ij, r_ij = job.define_scan_params(t00: unix_time, period_i = 0.005 sec, freq_offset_mode = 'bbdata', time_offset_mode = 'period', dm = 500)
+
+        # pulsar or FRB: Set the period to the pulsar period, use frequency offset based on dispersion measure of the pulsar, and integrate over a small fraction of the full gate (subwidth = 0.2):
+        t_ij, w_ij, r_ij = job.define_scan_params(t00: unix_time, period_i = 0.005 sec, freq_offset_mode = 'dm', time_offset_mode = 'period', dm = 500, width = 1, subwidth = 0.5)
+        
+        # make any modifications to t_ij, w_ij, or r_ij as necessary in your Jupyter notebook...
+
+        # ...then call:
+
+        run_correlator_job(t_ij, w_ij, r_ij)
+        
+
+        And go make coffee."""
     )
     parser.add_argument(
         "t_00",
         help="directory and path that holds the extracted maser data",
-        type=str,
-    )
-
-    parser.add_argument(
-        "clock",
-        help='Which clock? (Options: "chime", "pathfinder", "TONE")'
+        type=float,
     )
     parser.add_argument(
-        "-d",
-        "--drift",
-        help="Optional: specify a drift value (in ns/day)",
-        default="estimate",
+        "time_offset",
+        help="Time between scans, in seconds, measured topocentrically at the reference station. You can also specify this as a np.ndarray of 1024 numbers, but this isn't supported from the command line",
+        type=float,
+        default=1.0,
     )
     parser.add_argument(
-        "-o",
-        "--overwrite",
-        help="Optional: allow overwriting previously-processed delays",
-        action="store_true",
-        default=False,
+        "freq_offset_mode",
+        help='How to calculate frequency offset? (Options: "bbdata", "dm")'
+        default="bbdata",
     )
     cmdargs = parser.parse_args()
-    plot_dir, filename = os.path.split(cmdargs.maser_file)
-    if cmdargs.drift == "estimate":
-        delays_to_file(
-            cmdargs.maser_file, cmdargs.clock, drift_ns_day="estimate", overwrite=cmdargs.overwrite
-        )
-    else:  # use actual value provided
-        drift_ns_day = float(cmdargs.drift)
-        delays_to_file(
-            cmdargs.maser_file, cmdargs.clock, drift_ns_day=drift_ns_day, overwrite=cmdargs.overwrite
-        )
+    t_ij, w_ij, r_ij = job.define_scan_params(t00: unix_time, period_i = 0.005 sec, freq_offset_mode = 'bbdata', time_offset_mode = 'period', dm = 500)
+    if parallel:
+        run_correlator_job_multiprocessing(t_ij, w_ij, r_ij)
+    else:
+        run_correlator_job(t_ij, w_ij, r_ij)
