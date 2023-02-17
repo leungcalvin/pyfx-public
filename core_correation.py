@@ -1,5 +1,5 @@
 
-def correlation_core(DM, bbdata_A, bbdata_B, T_A, Window, R, calc_results, pointing,index_A=0,index_B=1):
+def correlation_core(DM, bbdata_A, bbdata_B, T_A, Window, R, calc_results,index_A=0,index_B=1):
     """ 
     DM - for steady sources, set dispersion measure to 0. 
     bbdata_A - telescope A, (sliced into a frequency chunk)
@@ -8,7 +8,6 @@ def correlation_core(DM, bbdata_A, bbdata_B, T_A, Window, R, calc_results, point
     Window[i,j] - length of time chunk window (us)
     R[i,j] - fraction of time chunk (defines pulse window). Variable name should be more descriptive
     calc_results - difxcalc object containing 
-    pointing - (ra,dec)
     index_A - where telescope A corresponds to in calc_results 
     index_B - where telescope B corresponds to in calc_results 
 
@@ -71,7 +70,8 @@ def correlation_core(DM, bbdata_A, bbdata_B, T_A, Window, R, calc_results, point
         subint_geo_t=geodelay_t-int_geodelay_0
 
         subint_delay_phase=2* np.pi* subint_geo_t* bbdata_B_clipped.index_map["freq"]["centre"]
-        bbdata_B_clipped=* np.exp(1j * subint_delay_phase)
+        bbdata_B_clipped=bbdata_B_clipped* np.exp(1j * subint_delay_phase)
+        ## will add fractional sample correction later
 
         #################################################
         ### It's now intrachannel de-dispersion Time. ###
