@@ -141,12 +141,26 @@ class CorrJob():
         tij = ti0[:,None] + np.arange(n_time)[None,:] * period_i[:,None]
         return tij
         
-    def wij(t_ij, r_ij, dm = None): # same for every baseline
+    def wij(t_ij, r_ij, dm = None): 
+        # Perform some checks on w_ij.
+        # w_ij < earth rotation timescale, since we only calculate one integer delay per scan. Each scan is < 0.4125 seconds.
+        # w_ij > DM smearing timescale, if we are using coherent dedispersion.
+        # w_ij should be an even number, for fast FFTs in coherent_dedisp and for fractional sample correction.
         freq = np.linspace(800,400,num = 1024, endpoint = False) # no nyquist freq
         w_ij = np.diff(t_ij,axis = -1) # the duration is equal to p_i by default
+        earth_rotation_time = 0.4125 # seconds https://www.wolframalpha.com/input?i=1.28+us+*+c+%2F+%28earth+rotation+speed+*+2%29
+        # make sure integer delay doesn't change as a function of time: # CL: I think you should do this in calc_scan.py, so that the inputs here are guaranteed to be safe.
+        # ensure w_ij is less than the minimum amount of time it takes for integer delay to change
+        c_light=300 #m/us
+        rotation_rate=460/10**6 #m/us)
+        assert(2*rotation_rate*Window[i,j]/c_light<2.56) #us
+            #or equivalently assert w_ij<.85 sec
+        assert w_ij < earth_rotation_time
+        assert (np.round(w_ij * r_ij) % 2 == 0).all()
         if DM is not None: # check that wij exceeds smearing time
             smearing_time = K_DM * DM * 0.390625 / freq**3
             assert (np.max(w_ij,axis = -1) > smearing_time).all() # check all frequency channels
+        self.w_ij = w_ij
 
     def run_correlator_job(t_ij, w_ij, r_ij):
         output = VLBIVis()

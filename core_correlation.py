@@ -1,15 +1,15 @@
-
-def correlation_core(DM, bbdata_A, bbdata_B, T_A, Window, R, calc_results,index_A=0,index_B=1):
+def autocorr_core(DM, bbdata_A, T_A, Window, R, calc_results):
+def crosscorr_core(DM, bbdata_A, bbdata_B, T_A, Window, R, calc_results,index_A=0,index_B=1):
     """ 
-    DM - for steady sources, set dispersion measure to 0. 
+    DM - the DM with which we de-smear the data before the final gating. for steady sources, set dispersion measure to 0. 
     bbdata_A - telescope A, (sliced into a frequency chunk)
     bbdata_B - telescope B, (sliced into a frequency chunk)
     T_A[i,j] - start times at ith frequency, for jth time chunk, for telescope A
     Window[i,j] - length of time chunk window (us)
     R[i,j] - fraction of time chunk (defines pulse window). Variable name should be more descriptive
     calc_results - difxcalc object containing 
-    index_A - where telescope A corresponds to in calc_results 
-    index_B - where telescope B corresponds to in calc_results 
+    index_A - where telescope A corresponds to in calc_results: CL: ideally, you should figure out the telescope index from the BBData object.
+    index_B - where telescope B corresponds to in calc_results: CL: ideally, you should figure out the telescope index from the BBData object. 
 
     Note: t_ij_B is not used here
     
@@ -31,12 +31,6 @@ def correlation_core(DM, bbdata_A, bbdata_B, T_A, Window, R, calc_results,index_
 
     for pointing in pointings:
         for j in time_chunks: 
-            # make sure integer delay doesn't change as a function of time:  
-            # ensure w_ij is less than the minimum amount of time it takes for integer delay to change
-            c_light=300 #m/us
-            rotation_rate=460/10**6 #m/us)
-            assert(2*rotation_rate*Window[i,j]/c_light<2.56) #us
-            #or equivalently assert w_ij<.85 sec
 
             #################################################
             ### Calculate scanning window for A and B #######
@@ -47,6 +41,15 @@ def correlation_core(DM, bbdata_A, bbdata_B, T_A, Window, R, calc_results,index_
             ### geodelay_0 > 0 if signal arrives at telescope A before B, otherwise geodelay_0 will be < 0. 
 
             ### revisit revisit (rounding or floor) #####
+            ### CL: having thought about this more, I don't think it matters, AS LONG AS you do the frac samp correction. 
+            # Suppose your total delay is 10.6 frames.
+            # You can round to 11 frames. You should keep track that you rounded to 11, and then do frac samp -0.4.
+            # If you floor to 10 frames, you should keep track that you floored to 10, and then do frac samp +0.6.
+
+            # Answer should be the same either way -- as long as you do the frac samp correction!
+
+            # Similarly, if you apply phase, exp(2j*np.pi*channel_center * -0.4/(2.56us) = exp(2j*np.pi*channel_center * +0.6/(2.56us), but only for the exact frequency corresponding to channel center, not any of the other frequencies that do not satisfy f = 800 - (N * 0.390625 MHz) for integers N -- this is the narrowband approximation.
+            
             sign=np.sign(geodelay_0)
             int_geodelay_0 = sign*np.floor((sign*geodelay_0).to(un.us).value / 2.56, dtype=int) ## floor absolute value. This might be stupid. 
 
@@ -78,12 +81,13 @@ def correlation_core(DM, bbdata_A, bbdata_B, T_A, Window, R, calc_results,index_
             subint_delay_phase=2* np.pi* subint_geo_t* bbdata_B_clipped.index_map["freq"]["centre"]
             bbdata_B_clipped=bbdata_B_clipped* np.exp(1j * subint_delay_phase)
             ## will add fractional sample correction later
+            ## Could consider applying fractional sample correction NOW via get_aligned_scans(), then apply subint_delay_phase and keep going.
 
             
             #################################################
             ### It's now intrachannel de-dispersion Time. ###
-            bbdata_A_dedispersed=coherent_dedisp(bbdata_A, DM)
-            bbdata_B_dedispersed=coherent_dedisp(bbdata_B, DM)
+            bbdata_A_dedispersed=intrachannel_dedisp(bbdata_A, DM)
+            bbdata_B_dedispersed=intrachannel_dedisp(bbdata_B, DM)
 
             
             #######################################################
@@ -107,3 +111,48 @@ def correlation_core(DM, bbdata_A, bbdata_B, T_A, Window, R, calc_results,index_
 
         return cross, autos_A, autos_B
 
+def intrachannel_dedisp(data, f0, tau0 = None):
+    """Intrachannel dedispersion: brings data to center of channel.
+
+    data : np.ndarray of shape (nfreq,...,ntime)
+
+    f0 : np.ndarray of shape (nfreq) holding channel centers.
+
+    TODO: use numba or GPU for this!"""
+    n = data.shape[-1]
+    f = np.fftfreq(n) * 0.390625
+    for iifreq, _f0 in enumerate(f0):
+        transfer_func = np.exp(-2j*np.pi*K_DM * DM * f**2 / _f0**2 / (f + _f0)) # double check this minus sign -- might be a + instead in CHIME data.
+        data[iifreq,...] = ifft(fft(data[iifreq,...],axis = -1) * transfer_func)
+    return data
+
+def frac_samp_shift(data, f0, tau0 = None):
+    """Fractional sample correction: coherently shifts data within a channel.
+
+    data : np.ndarray of shape (nfreq,...,ntime)
+
+    f0 : np.ndarray of shape (nfreq) holding channel centers.
+
+    TODO: use numba or GPU for this!"""
+    n = data.shape[-1]
+    f = np.fftfreq(n) * 0.390625
+    for iifreq, _f0 in enumerate(f0):
+        transfer_func = np.exp(2j*np.pi*f*_tau0) # apply dphi/dfreq
+        data[iifreq,...] = ifft(fft(data[iifreq,...],axis = -1) * transfer_func) * np.exp(2j*np.pi*_f0*_tau0) # apply phi
+    return data
+        
+def get_aligned_scans(bbdata_a,bbdata_b, t0_a,t0_b,tau_at_start):
+    # One freq only, since aligned_a and aligned_b are probably diferent lengths for diff frequencies. Could zero pad aligned_a and aligned_b.
+    # Use astropy to do this calculation:
+    t0_a = astropy.Time(bbdata_a['time0']['ctime'][:],val2 = bbdata_a['time0']['ctime_offset'][:])
+    t0_b = astropy.Time(bbdata_b['time0']['ctime'][:],val2 = bbdata_b['time0']['ctime_offset'][:])
+
+    # assuming tau_at_start = TOA_a - TOA_b, we do
+    time_we_want_at_b = t0_a + tau_at_start
+    index_we_have_at_b = np.round((time_we_want_at_b - t0_b ) / 2.56e-6)
+    time_we_have_at_b = t0_b + index_we_have_at_b * 2.56e-6
+    residual = (time_we_want_at_b - time_we_have_at_b)
+    aligned_a = bbdata_a[t0_a:t0_a + wij]
+    aligned_b = frac_samp_shift(bbdata_b[index_we_have_at_b:index_we_have_at_b + wij],f0 = bbdata_a.index_map['freq']['centre'][:],tau0 = residual)
+
+    return aligned_a,aligned_b
