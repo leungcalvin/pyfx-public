@@ -1,4 +1,26 @@
-def autocorr_core(DM, bbdata_A, T_A, Window, R, calc_results):
+from pyfx.math import fft_corr
+
+def autocorr_core(DM, bbdata_A, T_A, Window, R, max_lag = None):
+    """Correlates and downselects over lag (potentially more lags at shorter integration times"""
+    n_freq = bbdata_A.freq
+    n_time = T_A.shape
+    vis_shape = (n_freq, 2, 2, 2 * max_lag + 1, n_time)
+    #autocorr = np.zeros((n_freq, n_pol, n_pol, n_lag, n_time))
+    auto_vis = np.zeros(vis_shape,dtype = bbdata_A.dtype)
+    if max_lag is None: 
+        max_lag = np.max(window) # in order to hold all autocorrelations, there must be one max lag for all frequencies and times.
+    
+    for iifreq, freq_id in enumerate(bbdata_A.index_map['freq']['id']):
+        for iipol in range(2):
+            for jjpol in range(2):
+                for iitime in range(n_time):
+                    t_ij = T_A[iifreq, iitime]
+                    _vis = fft_corr(bbdata_A[iifreq, :, t_ij + w_ij // 2 - r_ij // 2: t_ij + w_ij // 2 + r_ij // 2], 
+                                    bdata_A[iifreq, :, t_ij + w_ij // 2 - r_ij // 2: t_ij + w_ij // 2 + r_ij // 2], 
+                                    axis = -1)
+                    auto_vis[iifreq, iipol, jjpol, :, iitime] = max_lag_slice(_vis, max_lag, lag_axis = -1)
+    return auto_vis
+        
 def crosscorr_core(DM, bbdata_A, bbdata_B, T_A, Window, R, calc_results,index_A=0,index_B=1):
     """ 
     DM - the DM with which we de-smear the data before the final gating. for steady sources, set dispersion measure to 0. 
