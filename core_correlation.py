@@ -1,4 +1,4 @@
-from pyfx.math import fft_corr
+from pyfx.core_math import fft_corr
 
 
 def autocorr_core(DM, bbdata_A, T_A, Window, R, max_lag=None):

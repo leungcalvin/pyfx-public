@@ -15,32 +15,31 @@ For one baseline, to extrapolate as a function of frequency (this is the easiest
     - "start the scan ASAP" : this is used for steady sources. It makes the most use of the data dumped in each frequency channel and doesn't waste data.
         The algorithm to do this is to use the start times (BBData.index_map['time0') from each station. Call this A_i and B_i for stations A and B respectively. We don't need t_00. Instead, just use t_i0 = max(A_i, B_i + 2.56 * round(baseline_delay(A,B,t_i0,ra,dec))).
 
-At this point, we now have t_i0 for one baseline. Now we need t_ij from t_i0 for that baseline. What are some algorithms to do this? 
+At this point, we now have t_i0 for one baseline. Now we need t_ij from t_i0 for that baseline. What are some algorithms to do this?
     - "periodic gate start times" : this is used for slow pulsars and FRBs (where off pulses are nice). If we want to use larger gates in different frequency channels, which might result from a different pulse shape in different channels, we might want to space things out differently for different channels. We need to define the spacing between successive starts: call this P_i. Then t_ij = t_i0 + P_i * j. We should choose N_scans such that we do not exceed the dump end time for that channel. Since we need the same number of scans, we need to calculate N_scan ahead of time.
 
     - "pulsar binning" : this is used for millisecond pulsars and takes into account arbitrary acceleration/deceleration of the pulsar by using the topocentric rotational phase phi(i,t) at station A. Given t_i0, calculate t_ij by looking at the topocentric rotational phase phi(i,t). The rotational phase depends on the frequency (i) because of the DM delay and the time (t) because of astrophysics. Define t_i1, such that phi(i,t_ij) = phi(i,ti0) + 1 (i.e. when the pulsar rotates by one revolution.
-   
-Now we have t_ij, the start time as a function of time and frequency for a single baseline. Let's calculate the stop time of the scan (equivalently the width w_ij) of the scan. 
-    - The only reasonable scheme I can imagine is having w_ij = w_i. 
+
+Now we have t_ij, the start time as a function of time and frequency for a single baseline. Let's calculate the stop time of the scan (equivalently the width w_ij) of the scan.
+    - The only reasonable scheme I can imagine is having w_ij = w_i.
     - Warn the user if w_i > P_i (i.e. the scans overlap).
     - Warn the user if w_i < intrachannel smearing time (K_DM * DM * df / f**3)
     - Add as an option to round w_i to the next_fast_len in scipy.fft (for faster FFTs)
 
-Finally, we need to know the "subintegration" period. After coherently dedispersing the scan, between t_ij and t_ij + w_ij, we need to know what part of the data to actually integrate. I think a reasonable way to paramterize this is with a number 0 < r_ij < 1. After coherent dedispersion, we integrate over the range t_ij + w_i/2 +- r_ij / 2 (i.e. about the central part of the scan). 
+Finally, we need to know the "subintegration" period. After coherently dedispersing the scan, between t_ij and t_ij + w_ij, we need to know what part of the data to actually integrate. I think a reasonable way to paramterize this is with a number 0 < r_ij < 1. After coherent dedispersion, we integrate over the range t_ij + w_i/2 +- r_ij / 2 (i.e. about the central part of the scan).
     - Warn the user if w_i * r_ij is not an integer power of 2 (for fast FFTs).
     - Add as an option to round w_i * r_ij to the next_fast_len in scipy.fft (for faster FFTs)
 
-Now we have t_ij and w_ij for one baseline. How do we get the other baselines? They have different frequency coverage, and different time coverage. But really, all we need is to extrpolate t00 for one baseline to get t00 for another baseline, and then run the above algorithm. 
+Now we have t_ij and w_ij for one baseline. How do we get the other baselines? They have different frequency coverage, and different time coverage. But really, all we need is to extrpolate t00 for one baseline to get t00 for another baseline, and then run the above algorithm.
 We can use difxcalc's baseline_delay function evaluated at t00 to calculate the delay between station a and station c. Then we apply the above logic to baseline cd. We ignore retarded baseline effects in this calculation but those are much smaller than the time resolution anyway.
 """
 
 import numpy as np
-from scipy.fft import fft, ifft, next_fast_len
 from astropy.time import Time
-
+from baseband_analysis.core import BBData
 from difxcalc_wrapper import io, runner, telescopes
 from difxcalc_wrapper.config import DIFXCALC_CMD
-from baseband_analysis.core import BBData
+from scipy.fft import fft, ifft, next_fast_len
 
 K_DM = 1 / 2.41e-4  # in s MHz^2 / (pc cm^-3)
 
@@ -124,14 +123,14 @@ class CorrJob:
 
         return t_ij, r_ij, w_ij
 
-    def ti0_from_t00_dm(t00, f0, t0, dm, fi,bbdata):
+    def ti0_from_t00_dm(t00, f0, t0, dm, fi, bbdata):
         ti0 = t00 + K_DM * dm * (fi**-2 - f0**-2)  # for fi = infinity, ti0 < t00.
-        return round_to_integer_frame(ti0,bbdata)
+        return round_to_integer_frame(ti0, bbdata)
 
-    def round_to_integer_frame(timestamps,bbdata):
+    def round_to_integer_frame(timestamps, bbdata):
         timestamps_rounded = np.zeros_like(timestamps)
         for iifreq in range(1024):
-            int_offset = round((timestamps - bbdata['time0']['ctime'][:])/2.56e-6)
+            int_offset = round((timestamps - bbdata["time0"]["ctime"][:]) / 2.56e-6)
 
             timestamps_rounded[iifreq] = timestamps + int_offset * 2.56e-6
         return timestamps
@@ -143,9 +142,9 @@ class CorrJob:
         unix_b[bbdata_b.index_map["freq"]["id"]] = bbdata_b["time0"]["ctime"][:]
 
         # ti0 = np.max(unix_a + tau_at_time0, unix_b)  # use this if we fringestop A
-        ti0 = np.maximum(unix_a ,unix_b - tau_at_time0) # use this if we fringestop B
+        ti0 = np.maximum(unix_a, unix_b - tau_at_time0)  # use this if we fringestop B
         # also might need to change the + to a - or vice versa
-        return round_to_integer_frame(ti0,bbdata_a)
+        return round_to_integer_frame(ti0, bbdata_a)
 
     def tij_from_ti0_period(ti0, period_i, bbdata_a, bbdata_b):
         """
@@ -160,8 +159,8 @@ class CorrJob:
         valid_b = bbdata_b["time0"]["ctime"][:] + 2.56e-6 * bbdata_b.ntime
         n_time = np.minimum(valid_a, valid_b) / period_i
         tij = ti0[:, None] + np.arange(n_time)[None, :] * period_i[:, None]
-        return round_to_integer_frame(tij,bbdata_a)
-    
+        return round_to_integer_frame(tij, bbdata_a)
+
     def wij(t_ij, r_ij, dm=None):
         # Perform some checks on w_ij.
         # w_ij < earth rotation timescale, since we only calculate one integer delay per scan. Each scan is < 0.4125 seconds.
@@ -238,13 +237,13 @@ if __name__ == "__main__":
 
         # pulsar or FRB: Set the period to the pulsar period, use frequency offset based on dispersion measure of the pulsar, and integrate over a small fraction of the full gate (subwidth = 0.2):
         t_ij, w_ij, r_ij = job.define_scan_params(t00: unix_time, period_i = 0.005 sec, freq_offset_mode = 'dm', time_offset_mode = 'period', dm = 500, width = 1, subwidth = 0.5)
-        
+
         # make any modifications to t_ij, w_ij, or r_ij as necessary in your Jupyter notebook...
 
         # ...then call:
 
         run_correlator_job(t_ij, w_ij, r_ij)
-        
+
 
         And go make coffee."""
     )
