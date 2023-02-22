@@ -44,8 +44,9 @@ from baseband_analysis.core import BBData
 
 K_DM = 1 / 2.41e-4  # in s MHz^2 / (pc cm^-3)
 
-class CorrJob():
-    def __init__(self,bbdata_list):
+
+class CorrJob:
+    def __init__(self, bbdata_list):
         """Set up the correlation job:
         Given a set of BBData objects, calculate N * (N-1) / 2 baselines.
         For each baseline, define t_ij, w_ij, and r_ij into arrays of shape (N_baseline, N_freq, N_time) by calling define_scan_params().
@@ -54,19 +55,32 @@ class CorrJob():
 
         self.telescopes = []
         for d in bbdata_list:
-            self.telescopes.append(telescope_from_bbdata(d))# need to implement something that figures out what telescopes from the bbdata object...probably do something like BBData.index_map['input'] and figure it out.
-        assert np.isclose(bbdata_list[0]['tiedbeam_locations']['ra'][:],d['tiedbeam_locations']['ra'][:]).all(),"ra values different, cannot correlate these datasets."
-        assert np.isclose(bbdata_list[0]['tiedbeam_locations']['dec'][:],d['tiedbeam_locations']['dec'][:]).all(), "dec values different, cannot correlate these datasets."
-        
-        self.ra = bbdata_a['tiedbeam_locations']['ra'][:]
-        self.dec = bbdata_a['tiedbeam_locations']['dec'][:]
+            self.telescopes.append(
+                telescope_from_bbdata(d)
+            )  # need to implement something that figures out what telescopes from the bbdata object...probably do something like BBData.index_map['input'] and figure it out.
+        assert np.isclose(
+            bbdata_list[0]["tiedbeam_locations"]["ra"][:],
+            d["tiedbeam_locations"]["ra"][:],
+        ).all(), "ra values different, cannot correlate these datasets."
+        assert np.isclose(
+            bbdata_list[0]["tiedbeam_locations"]["dec"][:],
+            d["tiedbeam_locations"]["dec"][:],
+        ).all(), "dec values different, cannot correlate these datasets."
+
+        self.ra = bbdata_a["tiedbeam_locations"]["ra"][:]
+        self.dec = bbdata_a["tiedbeam_locations"]["dec"][:]
 
         phase_centers = [
             ac.SkyCoord(ra=ra * un.deg, dec=dec * un.deg)
             for r, d in zip(R.flatten(), D.flatten())
         ]
-        start_time = np.min(bbdata_a['time0']['ctime'][:])
-        duration_sec = np.max(bbdata_a['time0']['ctime'][:]) - np.min(bbdata_a['time0']['ctime'][:]) + bbdata_a.ntime + bbdata_b.ntime # upper bound
+        start_time = np.min(bbdata_a["time0"]["ctime"][:])
+        duration_sec = (
+            np.max(bbdata_a["time0"]["ctime"][:])
+            - np.min(bbdata_a["time0"]["ctime"][:])
+            + bbdata_a.ntime
+            + bbdata_b.ntime
+        )  # upper bound
 
         _ = io.make_calc(
             telescopes,
@@ -85,106 +99,122 @@ class CorrJob():
         )
 
         tau_at_time0 = self.calcresults.baseline_delay(
-                ant1=ii_a,
-                ant2=ii_b,
-                time=Time(unix_a, format="unix"),
-                src=src,  # should be a 1 time value x 1 pointing evaluation
-            )
+            ant1=ii_a,
+            ant2=ii_b,
+            time=Time(unix_a, format="unix"),
+            src=src,  # should be a 1 time value x 1 pointing evaluation
+        )
 
-    def define_scan_params(t00: float, period_i, freq_offset_mode: str, time_offset_mode: str, **kwargs):
-        freq = np.linspace(800,400,num = 1024, endpoint=False)
+    def define_scan_params(
+        t00: float, period_i, freq_offset_mode: str, time_offset_mode: str, **kwargs
+    ):
+        freq = np.linspace(800, 400, num=1024, endpoint=False)
         t_ij = []
         r_ij = []
         w_ij = []
 
         for baseline in self.baselines:
-            if freq_offset_mode == 'dm':
-                _ti0 = ti0_from_t00_dm(t00,**kwargs['dm'],**kwargs['f0'])
-            if freq_offset_mode == 'bbdata':
+            if freq_offset_mode == "dm":
+                _ti0 = ti0_from_t00_dm(t00, **kwargs["dm"], **kwargs["f0"])
+            if freq_offset_mode == "bbdata":
                 _ti0 = _ti0_from_t00_bbdata
             _tij = tij_from_ti0_period(ti0, period_i, bbdata_a, bbdata_b)
             _rij = np.ones_like(_tij)
-            _wij = wij(t_ij,r_ij,dm = dm)
-        
-        return t_ij, r_ij, w_ij
-            
-    def ti0_from_t00_dm(t00,f0,dm,fi):
-        ti0 = t00 + K_DM * dm * (fi**-2 - f0**-2) # for fi = infinity, ti0 < t00.
-        return ti0
+            _wij = wij(t_ij, r_ij, dm=dm)
 
-    def ti0_from_t00_bbdata(bbdata_a,bbdata_b):
+        return t_ij, r_ij, w_ij
+
+    def ti0_from_t00_dm(t00, f0, t0, dm, fi,bbdata):
+        ti0 = t00 + K_DM * dm * (fi**-2 - f0**-2)  # for fi = infinity, ti0 < t00.
+        return round_to_integer_frame(ti0,bbdata)
+
+    def round_to_integer_frame(timestamps,bbdata):
+        timestamps_rounded = np.zeros_like(timestamps)
+        for iifreq in range(1024):
+            int_offset = round((timestamps - bbdata['time0']['ctime'][:])/2.56e-6)
+
+            timestamps_rounded[iifreq] = timestamps + int_offset * 2.56e-6
+        return timestamps
+
+    def ti0_from_t00_bbdata(bbdata_a, bbdata_b):
         unix_a = np.zeros(1024)
         unix_b = np.zeros(1024)
-        unix_a[bbdata_a.index_map['freq']['id']] = bbdata_a['time0']['ctime'][:]
-        unix_b[bbdata_b.index_map['freq']['id']] = bbdata_b['time0']['ctime'][:]
+        unix_a[bbdata_a.index_map["freq"]["id"]] = bbdata_a["time0"]["ctime"][:]
+        unix_b[bbdata_b.index_map["freq"]["id"]] = bbdata_b["time0"]["ctime"][:]
 
-        ti0 = np.max(unix_a + tau_at_time0,unix_b) # use this if we fringestop A
-        # ti0 = np.max(unix_a ,unix_b - tau_at_time0) # use this if we fringestop B
+        # ti0 = np.max(unix_a + tau_at_time0, unix_b)  # use this if we fringestop A
+        ti0 = np.maximum(unix_a ,unix_b - tau_at_time0) # use this if we fringestop B
         # also might need to change the + to a - or vice versa
-        return ti0
-        
-    def ti0_at_other_station(telescope):
-        self.calcresults.baseline_delay(ant1 = ii_ref, ant2 = index(telescope), time = ti0, src=self.src)
+        return round_to_integer_frame(ti0,bbdata_a)
 
-    def tij_from_ti0_period(ti0,period_i,bbdata_a,bbdata_b):
+    def tij_from_ti0_period(ti0, period_i, bbdata_a, bbdata_b):
         """
         ti0 : float64
             Containing start times at station A, good to 2.56 us.
         period_i : float or 1d-array
-            Spacing between successive scans.
+            Spacing between successive scans in frames.
         bbdata_a : BBData object.
         """
         period_i = np.atleast_1d(period_i)
-        valid_a = bbdata_a['time0']['ctime'][:] + 2.56e-6 * bbdata_a.ntime - ti0
-        valid_b = bbdata_b['time0']['ctime'][:] + 2.56e-6 * bbdata_b.ntime
-        n_time = np.minimum(valid_a,valid_b) / period_i
-        tij = ti0[:,None] + np.arange(n_time)[None,:] * period_i[:,None]
-        return tij
-        
-    def wij(t_ij, r_ij, dm = None): 
+        valid_a = bbdata_a["time0"]["ctime"][:] + 2.56e-6 * bbdata_a.ntime - ti0
+        valid_b = bbdata_b["time0"]["ctime"][:] + 2.56e-6 * bbdata_b.ntime
+        n_time = np.minimum(valid_a, valid_b) / period_i
+        tij = ti0[:, None] + np.arange(n_time)[None, :] * period_i[:, None]
+        return round_to_integer_frame(tij,bbdata_a)
+    
+    def wij(t_ij, r_ij, dm=None):
         # Perform some checks on w_ij.
         # w_ij < earth rotation timescale, since we only calculate one integer delay per scan. Each scan is < 0.4125 seconds.
         # w_ij > DM smearing timescale, if we are using coherent dedispersion.
         # w_ij should be an even number, for fast FFTs in coherent_dedisp and for fractional sample correction.
-        freq = np.linspace(800,400,num = 1024, endpoint = False) # no nyquist freq
-        w_ij = np.diff(t_ij,axis = -1) # the duration is equal to p_i by default
-        earth_rotation_time = 0.4125 # seconds https://www.wolframalpha.com/input?i=1.28+us+*+c+%2F+%28earth+rotation+speed+*+2%29
+        freq = np.linspace(800, 400, num=1024, endpoint=False)  # no nyquist freq
+        w_ij = np.diff(t_ij, axis=-1)  # the duration is equal to p_i by default
+        earth_rotation_time = 0.4125  # seconds https://www.wolframalpha.com/input?i=1.28+us+*+c+%2F+%28earth+rotation+speed+*+2%29
         # make sure integer delay doesn't change as a function of time: # CL: I think you should do this in calc_scan.py, so that the inputs here are guaranteed to be safe.
         # ensure w_ij is less than the minimum amount of time it takes for integer delay to change
-        c_light=300 #m/us
-        rotation_rate=460/10**6 #m/us)
-        assert(2*rotation_rate*Window[i,j]/c_light<2.56) #us
-            #or equivalently assert w_ij<.85 sec
+        c_light = 300  # m/us
+        rotation_rate = 460 / 10**6  # m/us)
+        assert 2 * rotation_rate * Window[i, j] / c_light < 2.56  # us
+        # or equivalently assert w_ij<.85 sec
         assert w_ij < earth_rotation_time
         assert (np.round(w_ij * r_ij) % 2 == 0).all()
-        if DM is not None: # check that wij exceeds smearing time
+        if DM is not None:  # check that wij exceeds smearing time
             smearing_time = K_DM * DM * 0.390625 / freq**3
-            assert (np.max(w_ij,axis = -1) > smearing_time).all() # check all frequency channels
+            assert (
+                np.max(w_ij, axis=-1) > smearing_time
+            ).all()  # check all frequency channels
         self.w_ij = w_ij
+
+    def ti0_at_other_station(telescope):
+        self.calcresults.baseline_delay(
+            ant1=ii_ref, ant2=index(telescope), time=ti0, src=self.src
+        )
 
     def run_correlator_job(t_ij, w_ij, r_ij):
         output = VLBIVis()
-        for b in baselines: # calculate cross-correlations
+        for b in baselines:  # calculate cross-correlations
             for f in freq:
-                answer = correlator_core(bbdata_a, bbdata_b, t_ij, w_ij, r_ij, freq_id = i) # run in series over time
-                output._from_ndarray_baseline(output, freq_sel = slice(i,i+1)
-        for s in stations: # calculate auto-correlations
+                answer = correlator_core(
+                    bbdata_a, bbdata_b, t_ij, w_ij, r_ij, freq_id=i
+                )  # run in series over time
+                output._from_ndarray_baseline(output, freq_sel=slice(i, i + 1))
+        for s in stations:  # calculate auto-correlations
             for f in freq:
                 answer = calculate_autos(bbdata_s)
-                output._from_ndarray_station(answer, freq_sel = slice(i,i+1))
+                output._from_ndarray_station(answer, freq_sel=slice(i, i + 1))
 
         return output
 
-
     def run_correlator_job_multiprocessing(t_ij, w_ij, r_ij):
+        """
         output = VLBIVis()
         for b in baselines:
-            for f in freq, but parallelized:
+            for f in freq:
                 answer = correlator_core(bbdata_a, bbdata_b, t_ij, w_ij, r_ij, freq_id = i) # run in series over time
                 output._from_ndarray_station(answer, freq_sel = slice(i,i+1))
                 # NEED SOME PARALLEL WRITER HERE
             # OR A CONCATENATE OVER FREQUENCY STAGE HERE
-        
+
         for s in stations: # calculate auto-correlations
             for f in freq, but parallelized:
                 _out_this_bl = VLBIVis()
@@ -194,6 +224,9 @@ class CorrJob():
                 deep_group_copy(_out_this_bl, output)
             # OR A CONCATENATE OVER FREQUENCY STAGE HERE
         return output
+        """
+        return NotImplementedError("Left as an exercise to the reader.")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -228,11 +261,17 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "freq_offset_mode",
-        help='How to calculate frequency offset? (Options: "bbdata", "dm")'
+        help='How to calculate frequency offset? (Options: "bbdata", "dm")',
         default="bbdata",
     )
     cmdargs = parser.parse_args()
-    t_ij, w_ij, r_ij = job.define_scan_params(t00: unix_time, period_i = 0.005 sec, freq_offset_mode = 'bbdata', time_offset_mode = 'period', dm = 500)
+    t_ij, w_ij, r_ij = job.define_scan_params(
+        t00=cmdargs.t00,  # unix
+        period_i=0.005,  # seconds
+        freq_offset_mode=cmdargs.time_offset,
+        time_offset_mode=cmdargs.freq_offset,
+        dm=500,  # pc cm-3
+    )
     if parallel:
         run_correlator_job_multiprocessing(t_ij, w_ij, r_ij)
     else:
