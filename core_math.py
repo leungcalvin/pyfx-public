@@ -11,7 +11,7 @@ def fft_corr(w1, w2, axis=-1):
     w2 : np.ndarray
 
     out : np.ndarray
-        The output will have lag zero at index 0."""
+        Correlation between w1 and w2: the output will have lag zero at index 0."""
     return ifft(fft(w1, axis=axis) * fft(w2, axis=axis).conj(), axis=axis)
 
 
