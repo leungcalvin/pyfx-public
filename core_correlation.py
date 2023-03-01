@@ -92,6 +92,7 @@ def crosscorr_core(
 
         for i in range(nfreq):
             f0 = bbdata_A.index_map["freq"]["centre"][:, None, None]) ##frequency centers in MHz
+            freq_id=chime_bbdata.index_map["freq"]['id'][:, None, None]) ##frequency ids
             for j in range(n_scan):
                 ### geodelay_0 > 0 if signal arrives at telescope A before B, otherwise geodelay_0 will be < 0.
                 ## get array of geometric delay over the scan (i.e .as a function of time)
@@ -109,20 +110,13 @@ def crosscorr_core(
                 int_geodelay=int(np.round(geodelay,sample_rate)) ##assuming int_geodelay=int_geodelay_0
                 subint_geodelay=geodelay-int_geodelay
                 
-                geodelay_0=geodelay_0_ij[i,j]
-                int_geodelay0=int(np.round(geodelay_0,sample_rate)) ##assuming int_geodelay=int_geodelay_0
-                subint_geodelay0=geodelay-int_geodelay
-                
 
                 ### Fringestopping B -> A
-                scan_a, scan_b_fs = get_aligned_scans(
-                    bbdata_A, bbdata_B, T_A[i,j], W[i,j], geodelay_0_ij, freq_id=i
+                scan_a, scan_b_fs,subint_geodelay0 = get_aligned_scans(
+                    bbdata_A, bbdata_B, T_A[i,j], W[i,j], geodelay_0_ij, freq_id=freq_id,sample_rate=sample_rate
                 )
                 ### apply tau_int as well as tau_frac*f_int
-                scan_b_fs = np.roll(scan_b_fs* np.exp(2j * f0 * np.pi * (subint_geodelay-subint_geodelay0)) ##might be cleaner to apply time dependent apply slope in frac_samp_shift
-                    int_geodelay,
-                    axis=-1,
-                ) 
+                scan_b_fs *= np.exp(2j * f0 * np.pi * (subint_geodelay-subint_geodelay0)) ##might be cleaner to apply time dependent apply slope in frac_samp_shift
 
                 #################################################
                 ### It's now intrachannel de-dispersion Time. ###
@@ -182,6 +176,8 @@ def frac_samp_shift(data, f0, tau0=None,sample_rate=0.390625):
 
     sample_rate : sampling rate of data in microseconds
 
+    tau0 : sub-frame delay in us 
+
     Applies a fractional phase shift of the form exp(2j*pi*f*tau0) to the data."""
     n = data.shape[-1]
     f = np.fftfreq(n) * sample_rate ## SA: generalized this for instruments other than chime
@@ -195,7 +191,7 @@ def frac_samp_shift(data, f0, tau0=None,sample_rate=0.390625):
     return data
 
 
-def get_aligned_scans(bbdata_a, bbdata_b, t_ij_a, w_ij, tau_at_start, freq_id):
+def get_aligned_scans(bbdata_a, bbdata_b, t_ij_a, w_ij, tau_at_start,freq_id,sample_rate=0.390625):
     """For a single frequency corresponding to a given FPGA freq_id, returns aligned scans of data for that freq_id out of two provided BBData objects.
 
     bbdata_a : BBData
@@ -210,11 +206,13 @@ def get_aligned_scans(bbdata_a, bbdata_b, t_ij_a, w_ij, tau_at_start, freq_id):
     w_ij : int
         A particular value w_ij for this baseline. Should be an integer, and brownie points for a good FFT length.
 
-    tau_at_start : np.float
-        A delay in microseconds to apply to BBData_b, corresponding to the retarded baseline delay tau_ab evaluated at time t_ij_a.
+    int_delay0 : np.float
+        A delay in frames to apply to BBData_b, corresponding to the retarded baseline delay tau_ab evaluated at time t_ij_a rounded to the nearest integer frame number.
 
-    freq_id : int
-        0 <= freq_id < 1024
+    subint_delay0 : np.float
+        A delay in microseconds to apply to BBData_b, corresponding to the retarded baseline delay tau_ab evaluated at time t_ij_a minus the integer delay.
+
+    freq_index : int
 
     Returns
     -------
@@ -244,14 +242,15 @@ def get_aligned_scans(bbdata_a, bbdata_b, t_ij_a, w_ij, tau_at_start, freq_id):
 
     # assuming tau_at_start = TOA_a - TOA_b, we do
     time_we_want_at_b = t_ij_a + tau_at_start
-    index_we_have_at_a = np.round((t_ij_a - t0_a) / 2.56e-6)
-    index_we_have_at_b = np.round((time_we_want_at_b - t0_b) / 2.56e-6)
+    index_we_have_at_a = np.round((t_ij_a - t0_a)/ (sample_rate*10**-6))
+    index_we_have_at_b = np.round((time_we_want_at_b - t0_b) / (sample_rate*10**-6))
     time_we_have_at_b = t0_b + index_we_have_at_b * 2.56e-6
-    residual = time_we_want_at_b - time_we_have_at_b
+    residual = (time_we_want_at_b - time_we_have_at_b)*10**6, #expected in us #subinteger frame delay
     aligned_a = bbdata_a[t0_a : t0_a + wij]
     aligned_b = frac_samp_shift(
         bbdata_b[index_we_have_at_b : index_we_have_at_b + wij],
         f0=bbdata_b.index_map["freq"]["centre"][iif_b],
         tau0=residual,
+        sample_rate=sample_rate
     )
     return aligned_a, aligned_b,residual
