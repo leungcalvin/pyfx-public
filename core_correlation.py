@@ -114,26 +114,22 @@ def crosscorr_core(bbdata_A, bbdata_B, T_A, Window, R, calc_results,DM,index_A=0
                     format="unix",
                     precision=9,  
                 )
-                query_times = start_time + sample_rate*1e-6 * un.s * (T_A_index+np.arange(w_ij))
+                query_times = start_time + sample_rate*1e-6 * un.s * (T_A_index+np.arange(w_ij+100)) #also calculating 100 frames ahead as cushion
                 # using telescope A times as reference time
-        ### should probably just call this once out of the for loop but will fix later
+                ### should probably just call this once out of the for loop using np.flatten but will fix later
                 geodelay = calc_results.retarded_baseline_delay(
-                    ant1=index_A, ant2=index_B, time=query_times, src=pointing,self_consistent=False
-                )
-                geodelay0=geodelay[0]
+                    ant1=index_A, ant2=index_B, time=query_times, src=pointing,delay_sign=0,self_consistent=False
+                )           
                 
-                int_geodelay=int(np.round(geodelay[0]/sample_rate)) #assuming scan is short enough so that int_geodelay=int_geodelay_0
-                subint_geodelay=geodelay-int_geodelay
-                
-
                 ### Fringestopping B -> A at time T_A
-                scan_a, scan_b_fs,subint_geodelay0,newstart = get_aligned_scans(
-                    bbdata_A, bbdata_B, T_A[iifreq,jjscan],T_A_index, w_ij, geodelay0, freq_id=iifreq,sample_rate=sample_rate
+                scan_a, scan_b_fs, subint_geodelay_remainder = get_aligned_scans(
+                    bbdata_A, bbdata_B, T_A[iifreq,jjscan],T_A_index, w_ij, geodelay, freq_id=iifreq,sample_rate=sample_rate
                 )
+                
                 w_ij=np.size(scan_a,axis=-1) ## update width of the scan after geometric delay is applied (i.e. if original width went beyond bounds of the data, see get_aligned_scans)
-                subint_geodelay=subint_geodelay[newstart:newstart+w_ij]
+                                
                 ### applying time-dependent correction to geometric delay  
-                scan_b_fs *= np.exp(2j * f0 * np.pi * (subint_geodelay-subint_geodelay0)) 
+                scan_b_fs *= np.exp(2j * f0 * np.pi * subint_geodelay_remainder)
                 
 
                 #######################################################
@@ -214,7 +210,7 @@ def frac_samp_shift(data, f0, tau0=None,sample_rate=2.56):
     return data
 
 
-def get_aligned_scans(bbdata_A, bbdata_B, T_A_ij,T_A_index, wij, tau_at_start,freq_id, sample_rate=2.56):
+def get_aligned_scans(bbdata_A, bbdata_B, T_A_ij,T_A_index, wij, tau,freq_id, sample_rate=2.56):
     """For a single frequency corresponding to a given FPGA freq_id, returns aligned scans of data for that freq_id out of two provided BBData objects.
 
     bbdata_A : BBData
@@ -232,8 +228,9 @@ def get_aligned_scans(bbdata_A, bbdata_B, T_A_ij,T_A_index, wij, tau_at_start,fr
     int_delay0 : np.float
         A delay in frames to apply to BBData_b, corresponding to the retarded baseline delay tau_ab evaluated at time t_ij_a rounded to the nearest integer frame number.
 
-    tau_at_start : np.float
-        A delay in microseconds to apply to BBData_b, corresponding to the geometric delay evaluated at time t_ij_a 
+    tau : np.array (n_frame) of dtype np.float
+        A delay in microseconds to apply to BBData_b, corresponding to the geometric delay. 
+        The first index is the delay evaluated at time t_ij_a 
 
     freq_index : int
 
@@ -255,34 +252,42 @@ def get_aligned_scans(bbdata_A, bbdata_B, T_A_ij,T_A_index, wij, tau_at_start,fr
     Answer should be the same either way -- as long as you do the frac samp correction!
     After doing the integer part (shift by either 10 or 11 frames), we need to apply a phase rotation. Note that exp(2j*np.pi*channel_center * -0.4/(2.56us) = exp(2j*np.pi*channel_center * +0.6/(2.56us), for the exact frequency corresponding to channel center, but not for any of the other frequencies that do not satisfy f = 800 - (N * 0.390625 MHz) for integers N -- this is the narrowband approximation. We experience some de-correlation near the band edges, which is why we use fractional sample correction in this code.
     """
-   
-    t0_b = bbdata_B["time0"]["ctime"][freq_id]
-
     ## We need to enure that with the integer geometric frame delay applied, the width of the scan is still within the bounds of the data
     ## first case: if the geodelay is negative (signal arrived at telescope B first), ensure that start of scan is within bounds of telescope B. 
     ## based on how we've parameterized the code, it's much easier to adjust Wij than Rij....with pulsars though it makes more sense to adjust Rij,
     ## but we would need to use np.roll or cushion the data. Revisit
-    newstart=0
+    tau_at_start=tau[0]
+    integer_roll_A=0
     time_we_want_at_b = T_A_ij + tau_at_start*1e-6 #seconds
+    t0_b = bbdata_B["time0"]["ctime"][freq_id]
     index_we_have_at_b = int(np.round((time_we_want_at_b - t0_b) / (sample_rate*1e-6))) #frame number closest to start time
-    residual=(time_we_want_at_b - t0_b)*1e6 -index_we_have_at_b*(sample_rate) #mircoseconds
     if index_we_have_at_b<0:
-        newstart=-index_we_have_at_b #the number of frames we have to shift T_A_ij by to ensure T_A_ij+geodelay is contained within bbdata_B
-        wij-=newstart
-        T_A_index+=newstart
+        integer_roll_A=-index_we_have_at_b #the number of frames we have to shift T_A_ij by to ensure T_A_ij+geodelay is contained within bbdata_B
+        wij-=integer_roll_A
+        T_A_index+=integer_roll_A
+        time_we_want_at_b +=integer_roll_A*sample_rate*1e-6 #seconds
         index_we_have_at_b=0
 
+    ### fix this so there is no rounding error. 
+    time_we_have_at_b = t0_b+index_we_have_at_b*sample_rate*1e-6
+    residual0=(time_we_want_at_b - time_we_have_at_b)*1e6 #sub-frame delay at start time in mircoseconds
+    
     ## we also need to ensure that with the integer geometric frame delay applied, the end of the scan is still within the bounds of the data
     max_wij_B=np.ma.size(bbdata_B["tiedbeam_baseband"],axis=-1)-index_we_have_at_b 
     max_wij_A=np.ma.size(bbdata_A["tiedbeam_baseband"],axis=-1)-T_A_index
     wij=np.min([max_wij_B,max_wij_A,wij])
+
+    ## the remaining subinteger delay as a fraction of time (was originally calculated in terms of T_A_index)
+    subint_geodelay_remainder=(tau-(tau_at_start)) 
+    subint_geodelay_remainder=subint_geodelay_remainder[integer_roll_A:integer_roll_A+wij]
+
     aligned_a = bbdata_A['tiedbeam_baseband'][freq_id,:,T_A_index:T_A_index + wij]
     aligned_b = frac_samp_shift(bbdata_B['tiedbeam_baseband'][freq_id,:,index_we_have_at_b :index_we_have_at_b + wij],
         f0=bbdata_B.index_map["freq"]["centre"][freq_id],
-        tau0=residual,
+        tau0=residual0,
         sample_rate=sample_rate
     )
-    return aligned_a, aligned_b,residual,newstart
+    return aligned_a, aligned_b,subint_geodelay_remainder
 
 
 

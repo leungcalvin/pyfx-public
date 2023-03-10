@@ -19,7 +19,10 @@ def fft_corr(w1, w2, axis=-1):
 def max_lag_slice(array, max_lag, lag_axis=-1):
     """Downselects an array out to some maximum lag.
     SEA: isn't this just grabbing the first 0:max_lag elements and the last -max_lag:end elements...? 
-    I think the more simple and correct logic is just np.concatenate((array[...,:max_lag+1],array[...,-max_lag:]))
+    I think the more transparant logic is just 
+    within_n_lags=np.full(np.size(array,axis=-1),False); 
+    within_n_lags[:max_lag+1]=True; 
+    within_n_lags[-max_lag:]=True
 
     array : np.ndarray
         Some array of shape, with lag as one of its axes.
