@@ -1,7 +1,6 @@
 """A module which holds bindings to mathematical operations. Here we only import numpy and scipy."""
 import numpy as np
-from scipy import fft
-
+from scipy.fft import fft, ifft, next_fast_len,fftfreq
 
 def fft_corr(w1, w2, axis=-1):
     """Correlates but vectorizes over all axes except the correlation axis (-1 by default).
@@ -11,12 +10,16 @@ def fft_corr(w1, w2, axis=-1):
     w2 : np.ndarray
 
     out : np.ndarray
-        Correlation between w1 and w2: the output will have lag zero at index 0."""
+        Correlation between w1 and w2: the output will have lag zero at index 0.
+        out[1:n//2] contains positive lags, out[n//2+1] contains negative lags"""
+
     return ifft(fft(w1, axis=axis) * fft(w2, axis=axis).conj(), axis=axis)
 
 
 def max_lag_slice(array, max_lag, lag_axis=-1):
     """Downselects an array out to some maximum lag.
+    SEA: isn't this just grabbing the first 0:max_lag elements and the last -max_lag:end elements...? 
+    I think the more simple and correct logic is just np.concatenate((array[...,:max_lag+1],array[...,-max_lag:]))
 
     array : np.ndarray
         Some array of shape, with lag as one of its axes.
@@ -28,7 +31,7 @@ def max_lag_slice(array, max_lag, lag_axis=-1):
     shape[lag_axis] = 2 * max_lag + 1
     out = np.zeros(shape=shape, dtype=array.dtype)
     within_n_lags = (
-        np.abs(fft.fftfreq(array.shape[lag_axis]) * array.shape[lag_axis]) < max_lag
+        np.abs(fftfreq(array.shape[lag_axis]) * array.shape[lag_axis]) <= max_lag
     )
     return np.compress(within_n_lags, a=array, axis=lag_axis, out=out)
 
