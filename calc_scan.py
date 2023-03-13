@@ -191,16 +191,15 @@ class CorrJob:
 
     def run_correlator_job(t_ij, w_ij, r_ij):
         output = VLBIVis()
+        for s in stations:  # calculate auto-correlations
+            auto_vis = autocorr_core(bbdata_s)
+            output._from_ndarray_station(auto_vis, freq_sel=slice(i, i + 1))
         for b in baselines:  # calculate cross-correlations
             for f in freq:
-                answer = correlator_core(
+                vis = crosscor_core(
                     bbdata_a, bbdata_b, t_ij, w_ij, r_ij, freq_id=i
                 )  # run in series over time
-                output._from_ndarray_baseline(output, freq_sel=slice(i, i + 1))
-        for s in stations:  # calculate auto-correlations
-            for f in freq:
-                answer = calculate_autos(bbdata_s)
-                output._from_ndarray_station(answer, freq_sel=slice(i, i + 1))
+                output._from_ndarray_baseline(vis, freq_sel=slice(i, i + 1))
 
         return output
 
@@ -244,7 +243,6 @@ if __name__ == "__main__":
 
         run_correlator_job(t_ij, w_ij, r_ij)
 
-
         And go make coffee."""
     )
     parser.add_argument(
@@ -263,6 +261,11 @@ if __name__ == "__main__":
         help='How to calculate frequency offset? (Options: "bbdata", "dm")',
         default="bbdata",
     )
+    parser.add_argument(
+        "out_file",
+        help="E.g. /path/to/output_vis.h5",
+        default='./vis.h5',
+    )
     cmdargs = parser.parse_args()
     t_ij, w_ij, r_ij = job.define_scan_params(
         t00=cmdargs.t00,  # unix
@@ -272,6 +275,7 @@ if __name__ == "__main__":
         dm=500,  # pc cm-3
     )
     if parallel:
-        run_correlator_job_multiprocessing(t_ij, w_ij, r_ij)
+        output = run_correlator_job_multiprocessing(t_ij, w_ij, r_ij)
     else:
-        run_correlator_job(t_ij, w_ij, r_ij)
+        output = run_correlator_job(t_ij, w_ij, r_ij)
+    output.save(parser.out_file)
