@@ -20,9 +20,6 @@ def max_lag_slice(array, max_lag, lag_axis=-1):
     """Downselects an array out to some maximum lag.
     SEA: isn't this just grabbing the first 0:max_lag elements and the last -max_lag:end elements...? 
     I think the more transparant logic is just 
-    within_n_lags=np.full(np.size(array,axis=-1),False); 
-    within_n_lags[:max_lag+1]=True; 
-    within_n_lags[-max_lag:]=True
 
     array : np.ndarray
         Some array of shape, with lag as one of its axes.
@@ -30,12 +27,10 @@ def max_lag_slice(array, max_lag, lag_axis=-1):
     out : np.ndarray
         An array of the same shape as array, except the lag axis has been downselected to (2 * max_lag + 1).
     """
-    shape = list(array.shape)
-    shape[lag_axis] = 2 * max_lag + 1
     out = np.zeros(shape=shape, dtype=array.dtype)
-    within_n_lags = (
-        np.abs(fftfreq(array.shape[lag_axis]) * array.shape[lag_axis]) <= max_lag
-    )
+    within_n_lags=np.full(np.size(array,axis=lag_axis),False)
+    within_n_lags[:max_lag+1]=True
+    within_n_lags[-max_lag:]=True
     return np.compress(within_n_lags, a=array, axis=lag_axis, out=out)
 
 

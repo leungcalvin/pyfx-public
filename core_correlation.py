@@ -30,6 +30,7 @@ def autocorr_core(DM, bbdata_A, T_A, Window, R, max_lag=None,n_pol=2):
         )  # in order to hold all autocorrelations, there must be one max lag for all frequencies and times.
     
     vis_shape = (n_freq, n_pointings, n_pol, n_pol, n_scan, 2 * max_lag + 1)
+    # CL: the second-last axis is lag, and the last axis is time (the number of consecutive scans).
     # autocorr = np.zeros((n_freq, n_pol, n_pol, n_lag, n_time))
     auto_vis = np.zeros(vis_shape, dtype=bbdata_A['tiedbeam_baseband'].dtype)
 
@@ -58,7 +59,6 @@ def autocorr_core(DM, bbdata_A, T_A, Window, R, max_lag=None,n_pol=2):
                                 start : stop,
                             ])
                         auto_vis[iifreq, pointing, iipol, jjpol, iitime,:] = np.concatenate((_vis[:max_lag+1],_vis[-max_lag:]))
-
 
     return auto_vis
 
@@ -95,9 +95,11 @@ def crosscorr_core(bbdata_A, bbdata_B, T_A, Window, R, calc_results,DM,index_A=0
 
     cross = np.zeros(vis_shape, dtype=bbdata_A['tiedbeam_baseband'].dtype)
 
+    # CL: I will guarantee at the higher level stage that R_ij will be passed in correctly (of the right shape, etc.) -- no need to do it here.
     if (type(R) is np.ndarray)==False:
         R=np.full(Window.shape, R)
 
+    # Frequency loop on the outside, then pointing on the inside, then pol pol time.
     for pointing in range(n_pointings):
         for iifreq in range(n_freq):  
             ### require user to have "well-ordered" bbdata in frequency (iifreqA=iifreqB)      
@@ -151,7 +153,6 @@ def crosscorr_core(bbdata_A, bbdata_B, T_A, Window, R, calc_results,DM,index_A=0
                             scan_b_fs_cd[pol_1, start:stop])                            
                         cross[iifreq, pointing, pol_0, pol_1, jjscan,:] = np.concatenate((_vis[:max_lag+1],_vis[-max_lag:]))
         return cross
-
 
 def intrachannel_dedisp(data, DM,f0,sample_rate=2.56):
     """Intrachannel dedispersion: brings data to center of channel.
@@ -219,6 +220,7 @@ def get_aligned_scans(bbdata_A, bbdata_B, T_A_ij,T_A_index, wij, tau,freq_id, sa
 
     T_A_index : np.array of shape (1024, n_time)
         An array of indices corresponding to the start frames for telescope A 
+        CL: T_A_index is bbdata_A['time0']['fpga_offset'][freq_id == bbdata_A.index_map['freq']['id'][:]] or something like that. don't think you need it as an argument here.
 
     w_ij : int
         A particular value w_ij for this baseline. Should be an integer, and brownie points for a good FFT length.
@@ -243,6 +245,8 @@ def get_aligned_scans(bbdata_A, bbdata_B, T_A_ij,T_A_index, wij, tau,freq_id, sa
     newstart: int
         Number of frames by which we need to shift T_A_ij in order to ensure T_A_ij+geodelay is contained within bbdata_B. Note that in the event that geodelay is positive, newstart will always be 0 (assuming the user has chosen T_A_ij such that the unix time is in both datasets)
 
+        CL: I would argue that shifting t_A_ij for certain baselines seems a little ad-hoc. Otherwise you can't dictate which t_A_ij you have at the end of the day. More comments in the code itself, and an algorithm suggestion.
+
     Super technical note on floor vs round: it doesn't matter AS LONG AS you do a sub-sample rotation (or better yet, a frac samp correction)! Suppose your total delay is 10.6 frames.
     - You can round to 11 frames. You should keep track that you rounded to 11, and then do frac samp -0.4.
     - You can floor to 10 frames, you should keep track that you floored to 10, and then do frac samp +0.6.
@@ -266,6 +270,19 @@ def get_aligned_scans(bbdata_A, bbdata_B, T_A_ij,T_A_index, wij, tau,freq_id, sa
     ## writing things in a coordinate system where t'=0 at T_A_ij to minimize rounding errors...
     time_we_want_at_b = tau_at_start #us
     index_we_have_at_b = T_A_index+int(np.round((time_we_want_at_b*1e-6 - delta_A_B) / (sample_rate*1e-6))) #frame number closest to start time
+        
+    #CL: The two kinds of out-of-bounds errors you want to catch in this next section are: 
+    #CL: either index_we_have_at_B < 0 or index_we_have_at_B + w_ij > [length of data].
+    # You could shift wij and t_A_ij as you've done here. I think that will work. However it might be more transparent to zero-pad while assuming constant correlated flux. This has the desirable property that w_ij and t_A_ij are statically defined in the top level code and never change dynamically.
+    # Instead of your current proposal we could do
+    # aligned_b = np.zeros((2,w_ij)) # make an array of all zeros
+    # start_index_we_have_at_B = np.max(index_we_have_at_B, 0)
+    # stop_index_we_have_at_B = np.min(w_ij, bbdata_B.ntime - index_we_have_at_B)
+    # correction_factor = w_ij / (stop_index_we_have_at_B - start_index_we_have_at_B) # if you are missing half the data, multiply by 2.
+    # if correction_factor > 2: # warn the user that the boundary conditions are sketch if we are missing e.g. more than half the data.
+    # aligned_b[:,start_index_we_have_at_B:stop_index_we_have_at_B] = bbdata_B['tiedbeam_baseband'][freq_id,...,start_index_we_have_at_b:stop_index_we_have_at_B] * correction_factor 
+
+    # multiply by the correction factor to ensure that a steady source, when correlated, has the correct flux corresponding to the desired w_ij, even when we run out of data.
 
     if index_we_have_at_b<0:
         ## e.g. start of signal at B is before starttime of data aquired:
@@ -283,6 +300,8 @@ def get_aligned_scans(bbdata_A, bbdata_B, T_A_ij,T_A_index, wij, tau,freq_id, sa
         ## new tau at start is 
 
     ## we also need to ensure that with the integer geometric frame delay applied, the end of the scan is still within the bounds of the data
+
+    # CL: could use bbdata_B.ntime here for brevity
     max_wij_B=np.ma.size(bbdata_B["tiedbeam_baseband"],axis=-1)-index_we_have_at_b 
     max_wij_A=np.ma.size(bbdata_A["tiedbeam_baseband"],axis=-1)-T_A_index
     wij=np.min([max_wij_B,max_wij_A,wij])
@@ -298,8 +317,3 @@ def get_aligned_scans(bbdata_A, bbdata_B, T_A_ij,T_A_index, wij, tau,freq_id, sa
         sample_rate=sample_rate,
     )
     return aligned_a, aligned_b
-
-
-
-
-
