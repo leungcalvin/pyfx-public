@@ -250,8 +250,7 @@ def get_aligned_scans(bbdata_A, bbdata_B,T_A_index, wij, tau,freq_id, sample_rat
 
     time_we_want_at_b = tau[0] #us
     aligned_a = bbdata_A['tiedbeam_baseband'][freq_id,...,T_A_index:T_A_index + wij]
-    aligned_b = np.zeros(aligned_a.shape,dtype=bbdata_B['tiedbeam_baseband'].dtype) #initialize aligned B array
-
+    aligned_b = np.zeros(bbdata_B['tiedbeam_baseband'][freq_id].shape,dtype=bbdata_B['tiedbeam_baseband'].dtype) #initialize aligned B array
     ## calculate the additional offset between A and B in the event that the (samples points of) A and B are misaligned in absolute time by < 1 frame
     ## i.e. to correctly fringestop, we must also account for a case such as:
     ## A:    |----|----|----|----|----| ##
@@ -273,17 +272,16 @@ def get_aligned_scans(bbdata_A, bbdata_B,T_A_index, wij, tau,freq_id, sample_rat
     
     start_index_we_have_at_b = np.max([start_index_we_want_at_b, 0])# account for case where T_A_index+geodelay < 0 (i.e. signal arrives at telescope B before start of data acquision)
     pad_index_b=start_index_we_have_at_b-start_index_we_want_at_b #if index_we_have_at_b is negative, this will be the amount we need to cushion our output data by
-    
-    stop_index_we_have_at_b = np.min([wij-pad_index_b-1,wij+start_index_we_want_at_b-1, bbdata_B.ntime-start_index_we_have_at_b]) # account for case where T_A_index+geodelay+wij > length of bbdata (i.e. end of scan is not in telescope B data)
+    stop_index_we_have_at_b = np.min([start_index_we_have_at_b+wij,bbdata_B.ntime-start_index_we_have_at_b])
     new_wij=int(stop_index_we_have_at_b-start_index_we_have_at_b)
-
     correction_factor = wij / new_wij # if you are missing half the data, multiply by 2.
     if correction_factor > 2:
          # warn the user that the boundary conditions are sketch if we are missing e.g. more than half the data.
          print("warning: based on specified start time and scan length, over half the data is missing from telescope XX.")
     aligned_b[...,pad_index_b:pad_index_b+new_wij] = bbdata_B['tiedbeam_baseband'][freq_id,...,start_index_we_have_at_b:start_index_we_have_at_b+new_wij] * correction_factor 
     # multiply by the correction factor to ensure that a steady source, when correlated, has the correct flux corresponding to the desired w_ij, even when we run out of data.
- 
+    aligned_b=aligned_b[...,:wij]
+
     # current start time at B (relative to start time of A )= delta_A_B+start_index_we_want_at_b*sample_rate*1e-6-(T_A_index*sample_rate*1e-6)
     # = delta_A_B+int_delay
     ### calculate remaining sub-frame delay  
@@ -295,5 +293,4 @@ def get_aligned_scans(bbdata_A, bbdata_B,T_A_index, wij, tau,freq_id, sample_rat
         sub_frame_tau=sub_frame_tau,
         sample_rate=sample_rate,
         freq_id=freq_id)
-
     return aligned_a, aligned_b
