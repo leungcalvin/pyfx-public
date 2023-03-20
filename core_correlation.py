@@ -4,7 +4,6 @@ import numpy as np
 from astropy.time import Time, TimeDelta
 from decimal import Decimal
 import astropy.units as un
-import scipy 
 K_DM = 1 / 2.41e-4  # in s MHz^2 / (pc cm^-3)
 
 def autocorr_core(DM, bbdata_A, T_A, Window, R, max_lag=None,n_pol=2):
@@ -107,7 +106,6 @@ def crosscorr_core(bbdata_A, bbdata_B, T_A, Window, R, calc_results,DM,index_A=0
                 ### geodelay_0 > 0 if signal arrives at telescope A before B, otherwise geodelay_0 will be < 0.
                 ## get array of geometric delay over the scan (i.e .as a function of time)
                 
-                #check correct usage of ctime offset?
                 start_time= Time(
                     t0_a,
                     val2=bbdata_A["time0"]["ctime_offset"][iifreq],
@@ -125,9 +123,6 @@ def crosscorr_core(bbdata_A, bbdata_B, T_A, Window, R, calc_results,DM,index_A=0
                 scan_a, scan_b_fs = get_aligned_scans(
                     bbdata_A, bbdata_B,T_A_index, w_ij, geodelay, freq_id=iifreq,sample_rate=sample_rate
                 )
-
-                w_ij=np.size(scan_a,axis=-1) ## update width of the scan after geometric delay is applied (i.e. if original width went beyond bounds of the data, see get_aligned_scans)
-
 
                 #######################################################
                 ######### intrachannel de-dispersion Time. ############
@@ -179,7 +174,8 @@ def intrachannel_dedisp(data, DM,f0,sample_rate=2.56):
     return data
 
 
-def frac_samp_shift(data, f0, sub_frame_tau=None,sample_rate=2.56,freq_id=None):
+def frac_samp_shift(data, f0, sub_frame_tau=None,sample_rate=2.56,freq_id=None, complex_conjugate_convention=-1,
+intra_channel_sign=1):
     """Fractional sample correction: coherently shifts data within a channel.
 
     data : np.ndarray of shape (ntime)  
@@ -190,17 +186,21 @@ def frac_samp_shift(data, f0, sub_frame_tau=None,sample_rate=2.56,freq_id=None):
 
     sub_frame_tau: np.array of shape (ntime), sub-frame delay in us 
 
+    complex_conjugate_convention: a sign to account for the fact that the data may be complex conjugated
+
+    intra_channel_sign: a sign to account for a reflection of frequencies about zero (e.g. in iq/baseband data)
+
     Applies a fractional phase shift of the form exp(2j*pi*f*sub_frame_tau) to the data.
     
     ## need to rethink looping over frequency in the main function; this should take in an array of freqs
     """
     n = data.shape[-1]
-    f = scipy.fft.fftfreq(n, sample_rate)
-    transfer_func = np.exp(2j * np.pi * f * np.median(sub_frame_tau))  # apply dphi/dfreq
-    data2 = scipy.fft.ifft(
-        scipy.fft.fft(data) * transfer_func
+    f = np.fft.fftfreq(n, sample_rate)
+    transfer_func = np.exp(intra_channel_sign*2j * np.pi * f * np.median(sub_frame_tau))  # apply dphi/dfreq
+    data2 = np.fft.ifft(
+        np.fft.fft(data) * transfer_func
     ) * np.exp(
-        2j * np.pi * f0 * sub_frame_tau
+        complex_conjugate_convention*2j * np.pi * f0 * sub_frame_tau
     )  # apply phi
     return data2
     
