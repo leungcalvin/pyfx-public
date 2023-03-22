@@ -36,56 +36,73 @@ We can use difxcalc's baseline_delay function evaluated at t00 to calculate the 
 
 import numpy as np
 from astropy.time import Time
+import astropy.coordinates as ac
+import astropy.units as un
 from baseband_analysis.core import BBData
 from difxcalc_wrapper import io, runner, telescopes
 from difxcalc_wrapper.config import DIFXCALC_CMD
 from scipy.fft import fft, ifft, next_fast_len
+from misc import station_from_bbdata
 
 K_DM = 1 / 2.41e-4  # in s MHz^2 / (pc cm^-3)
 
+def same_pointing(bbdata_a,bbdata_b):
+    assert np.isclose(bbdata_a['tiedbeam_locations']['ra'][:],bbdata_b['tiedbeam_locations']['ra'][:]).all()
+    assert np.isclose(bbdata_a['tiedbeam_locations']['dec'][:],bbdata_b['tiedbeam_locations']['dec'][:]).all()
 
 class CorrJob:
-    def __init__(self, bbdata_list):
+    def __init__(self, bbdata_filepaths, reference_station = 'chime',ras = None, decs = None):
         """Set up the correlation job:
-        Given a set of BBData objects, calculate N * (N-1) / 2 baselines.
-        For each baseline, define t_ij, w_ij, and r_ij into arrays of shape (N_baseline, N_freq, N_time) by calling define_scan_params().
+        Get stations and order the bbdata_list as expected by difxcalc.
+        Run difxcalc with a single pointing center.
+        Choose station to use as the reference station, at which t_{ij} is initially inputted.
+        For each station, define t_ij, w_ij, and r_ij into arrays of shape (N_baseline, N_freq, N_time) by calling define_scan_params().
+        Given a set of BBData objects, define N * (N-1) / 2 baselines.
         Use run_difxcalc and save to self.calcresults so we only call difxcalc ONCE in the whole correlator job.
         """
+        self.tel_names= []
+        for d in bbdata_filepaths:
+            self.tel_names.append(
+                station_from_bbdata(
+                    BBData.from_file(
+                        bbdata_filepath,
+                        freq_sel = [0,-1],
+                    )
+                )
+            )
+        bbdata_filepaths = sorted(bbdata_filepaths,key=self.tel_names.index) # sort BBDatas alphabetically.
+        self.tel_names = sorted(self.tel_names) # sort tel_names alphabetically.
+        self.telescopes = [telescopes.tel_from_name(n) for n in self.tel_names]
 
-        self.telescopes = []
-        for d in bbdata_list:
-            self.telescopes.append(
-                telescope_from_bbdata(d)
-            )  # need to implement something that figures out what telescopes from the bbdata object...probably do something like BBData.index_map['input'] and figure it out.
-        assert np.isclose(
-            bbdata_list[0]["tiedbeam_locations"]["ra"][:],
-            d["tiedbeam_locations"]["ra"][:],
-        ).all(), "ra values different, cannot correlate these datasets."
-        assert np.isclose(
-            bbdata_list[0]["tiedbeam_locations"]["dec"][:],
-            d["tiedbeam_locations"]["dec"][:],
-        ).all(), "dec values different, cannot correlate these datasets."
-
-        self.ra = bbdata_a["tiedbeam_locations"]["ra"][:]
-        self.dec = bbdata_a["tiedbeam_locations"]["dec"][:]
-
+        bbdata_ref = BBData.from_file(bbdata_filepaths[self.tel_names.index(reference_station)],freq_sel=[0,-1])
+        # Get pointing centers from reference station, if needed.
+        if ras is None:
+            ras = bbdata_ref['tiedbeam_locations']['ra'][:]
+        if decs is None:
+            decs = bbdata_ref['tiedbeam_locations']['dec'][:]
+        self.ras = np.atleast_1d(ras)
+        self.decs = np.atleast_1d(decs)
         phase_centers = [
             ac.SkyCoord(ra=ra * un.deg, dec=dec * un.deg)
-            for r, d in zip(R.flatten(), D.flatten())
+            for r, d in zip(self.ras.flatten(), self.decs.flatten())
         ]
-        start_time = np.min(bbdata_a["time0"]["ctime"][:])
-        duration_sec = (
-            np.max(bbdata_a["time0"]["ctime"][:])
-            - np.min(bbdata_a["time0"]["ctime"][:])
-            + bbdata_a.ntime
-            + bbdata_b.ntime
-        )  # upper bound
+
+        earliest_start_unix = np.inf
+        latest_end_unix = -np.inf
+        for filepath in bbdata_filepaths:
+            this_bbdata = BBData.from_file(filepath,freq_sel = [0,-1])
+            assert same_pointing(bbdata_ref,this_bbdata)
+            earliest_start_unix = min(earliest_start_unix,
+                this_bbdata['time0'][0])
+            latest_end_unix = max(latest_end_unix, 
+                this_bbdata['time0'][-1] + this_bbdata.ntime)
+
+        duration_sec = latest_end_unix - earliest_start_unix + 1.0 
 
         _ = io.make_calc(
-            telescopes,
             phase_centers,
-            start_time,
-            duration_sec=int(duration_sec),
+            earliest_start_unix,
+            duration_sec=int(latest_end_unix - earliest_start_unix) + 1.0,
             ofile_name=calcfile,
         )
         self.calcresults = runner.run_difxcalc(
@@ -93,34 +110,49 @@ class CorrJob:
             sources=phase_centers,
             telescopes=telescopes,
             force=True,
-            remove_calcfile=False,
+            remove_calcfile=True,
             difxcalc_cmd=DIFXCALC_CMD,
         )
+        return 
 
-        tau_at_time0 = self.calcresults.baseline_delay(
-            ant1=ii_a,
-            ant2=ii_b,
-            time=Time(unix_a, format="unix"),
-            src=src,  # should be a 1 time value x 1 pointing evaluation
-        )
+        #for ii_b in range(len(self.tel_names)):
+        #tau_00 = self.calcresults.baseline_delay(
+        #    ant1=self.tel_names.index(reference_station),
+        #    ant2=ii_b,
+        #    time=Time(unix_a, format="unix"),
+        #    src=src,  # should be a 1 time value x 1 pointing evaluation
+        #)
 
     def define_scan_params(
-        t00: float, period_i, freq_offset_mode: str, time_offset_mode: str, **kwargs
+        self,
+        t00_ref: float, 
+        freq_offset_mode: str, 
+        time_offset_mode: str, 
+        **kwargs
     ):
-        freq = np.linspace(800, 400, num=1024, endpoint=False)
-        t_ij = []
+    """
+    kwargs : 'dm' and 'f0', 'period', 'pdot','wi'
+    """
+        t_ij_ref = []
         r_ij = []
         w_ij = []
 
-        for baseline in self.baselines:
-            if freq_offset_mode == "dm":
-                _ti0 = ti0_from_t00_dm(t00, **kwargs["dm"], **kwargs["f0"])
-            if freq_offset_mode == "bbdata":
-                _ti0 = _ti0_from_t00_bbdata
-            _tij = tij_from_ti0_period(ti0, period_i, bbdata_a, bbdata_b)
+        # First do t_aij for the reference station...
+        if freq_offset_mode == "dm":
+            _ti0 = ti0_from_t00_dm(t00_ref, **kwargs["dm"], **kwargs["f0"])
+        if freq_offset_mode == "bbdata":
+            _ti0 = _ti0_from_t00_bbdata
+
+        if time_offset_mode == "period":
+            _tij = tij_from_ti0_period(_ti0, period_i, bbdata_a, bbdata_b)
+        if time_offset_mode == "p+pdot":
+            _tij = tij_from_ti0_ppdot(_ti0, period_i, bbdata_a, bbdata_b)
+
+        for station in np.arange(len(self.tel_names)):
             _rij = np.ones_like(_tij)
             _wij = wij(t_ij, r_ij, dm=dm)
 
+        freq = np.linspace(800, 400, num=1024, endpoint=False)
         return t_ij, r_ij, w_ij
 
     def ti0_from_t00_dm(t00, f0, t0, dm, fi, bbdata):
