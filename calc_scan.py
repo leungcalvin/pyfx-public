@@ -33,7 +33,7 @@ Finally, we need to know the "subintegration" period. After coherently dedispers
 Now we have t_ij and w_ij for one baseline. How do we get the other baselines? They have different frequency coverage, and different time coverage. But really, all we need is to extrpolate t00 for one baseline to get t00 for another baseline, and then run the above algorithm.
 We can use difxcalc's baseline_delay function evaluated at t00 to calculate the delay between station a and station c. Then we apply the above logic to baseline cd. We ignore retarded baseline effects in this calculation but those are much smaller than the time resolution anyway.
 """
-
+import os,datetime
 import numpy as np
 from astropy.time import Time
 import astropy.coordinates as ac
@@ -42,16 +42,18 @@ from baseband_analysis.core import BBData
 from difxcalc_wrapper import io, runner, telescopes
 from difxcalc_wrapper.config import DIFXCALC_CMD
 from scipy.fft import fft, ifft, next_fast_len
-from misc import station_from_bbdata
+from misc import station_from_bbdata,CALCFILE_DIR
 
 K_DM = 1 / 2.41e-4  # in s MHz^2 / (pc cm^-3)
+FREQ = np.linspace(800,400,num = 1024, endpoint = False)
 
 def same_pointing(bbdata_a,bbdata_b):
     assert np.isclose(bbdata_a['tiedbeam_locations']['ra'][:],bbdata_b['tiedbeam_locations']['ra'][:]).all()
     assert np.isclose(bbdata_a['tiedbeam_locations']['dec'][:],bbdata_b['tiedbeam_locations']['dec'][:]).all()
+    return True
 
 class CorrJob:
-    def __init__(self, bbdata_filepaths, reference_station = 'chime',ras = None, decs = None):
+    def __init__(self, bbdata_filepaths, ras = None, decs = None):
         """Set up the correlation job:
         Get stations and order the bbdata_list as expected by difxcalc.
         Run difxcalc with a single pointing center.
@@ -61,29 +63,31 @@ class CorrJob:
         Use run_difxcalc and save to self.calcresults so we only call difxcalc ONCE in the whole correlator job.
         """
         self.tel_names= []
-        for d in bbdata_filepaths:
+        for path in bbdata_filepaths:
             self.tel_names.append(
                 station_from_bbdata(
                     BBData.from_file(
-                        bbdata_filepath,
+                        path,
                         freq_sel = [0,-1],
                     )
                 )
             )
-        bbdata_filepaths = sorted(bbdata_filepaths,key=self.tel_names.index) # sort BBDatas alphabetically.
+        _bbdata_filepaths = [bbdata_filepaths[ii] for ii in np.argsort(self.tel_names)]
+        bbdata_filepaths = _bbdata_filepaths # avoid sort-in-place problems
+
         self.tel_names = sorted(self.tel_names) # sort tel_names alphabetically.
         self.telescopes = [telescopes.tel_from_name(n) for n in self.tel_names]
 
-        bbdata_ref = BBData.from_file(bbdata_filepaths[self.tel_names.index(reference_station)],freq_sel=[0,-1])
+        bbdata_0 = BBData.from_file(bbdata_filepaths[0],freq_sel=[0,-1])
         # Get pointing centers from reference station, if needed.
         if ras is None:
-            ras = bbdata_ref['tiedbeam_locations']['ra'][:]
+            ras = bbdata_0['tiedbeam_locations']['ra'][:]
         if decs is None:
-            decs = bbdata_ref['tiedbeam_locations']['dec'][:]
+            decs = bbdata_0['tiedbeam_locations']['dec'][:]
         self.ras = np.atleast_1d(ras)
         self.decs = np.atleast_1d(decs)
-        phase_centers = [
-            ac.SkyCoord(ra=ra * un.deg, dec=dec * un.deg)
+        self.pointings = [
+            ac.SkyCoord(ra=r * un.deg, dec=d * un.deg)
             for r, d in zip(self.ras.flatten(), self.decs.flatten())
         ]
 
@@ -91,24 +95,25 @@ class CorrJob:
         latest_end_unix = -np.inf
         for filepath in bbdata_filepaths:
             this_bbdata = BBData.from_file(filepath,freq_sel = [0,-1])
-            assert same_pointing(bbdata_ref,this_bbdata)
+            assert same_pointing(bbdata_0,this_bbdata)
             earliest_start_unix = min(earliest_start_unix,
-                this_bbdata['time0'][0])
+                this_bbdata['time0']['ctime'][0])
             latest_end_unix = max(latest_end_unix, 
-                this_bbdata['time0'][-1] + this_bbdata.ntime)
+                this_bbdata['time0']['ctime'][-1] + this_bbdata.ntime)
 
-        duration_sec = latest_end_unix - earliest_start_unix + 1.0 
-
+        duration_sec = int(latest_end_unix - earliest_start_unix + 1.0 )
+        calcfile_name = os.path.join(CALCFILE_DIR, 'pyfx_corrjob_' + str(bbdata_0.attrs['event_id']) + '_' + datetime.datetime.now().strftime('%Y%m%dT%H%M%S') + '.calc')
         _ = io.make_calc(
-            phase_centers,
-            earliest_start_unix,
-            duration_sec=int(latest_end_unix - earliest_start_unix) + 1.0,
-            ofile_name=calcfile,
+            telescopes =self.telescopes,
+            sources = self.pointings,
+            time = Time(earliest_start_unix, format = 'unix', precision = 9),
+            duration_sec=duration_sec,
+            ofile_name=calcfile_name,
         )
         self.calcresults = runner.run_difxcalc(
-            calcfile,
-            sources=phase_centers,
-            telescopes=telescopes,
+            calcfile_name,
+            sources=self.pointings,
+            telescopes=self.telescopes,
             force=True,
             remove_calcfile=True,
             difxcalc_cmd=DIFXCALC_CMD,
@@ -117,83 +122,191 @@ class CorrJob:
 
         #for ii_b in range(len(self.tel_names)):
         #tau_00 = self.calcresults.baseline_delay(
-        #    ant1=self.tel_names.index(reference_station),
+        #    ant1=self.tel_names.index(ref_station),
         #    ant2=ii_b,
         #    time=Time(unix_a, format="unix"),
         #    src=src,  # should be a 1 time value x 1 pointing evaluation
         #)
 
+    def t0_f0_from_bbdata(t0f0,bbdata_ref):
+        """ Returns the actual t00 and f0 from bbdata_ref.
+
+        This allows you to specify, e.g. the "start" of the dump at the "top" of the band by passing in ("start","top").
+
+        """
+
+        if _f0 == 'top': # use top of the collected band as reference freq
+            iifreq = 0
+        if _f0 == 'bottom': # use bottom of the collected band as reference freq
+            iifreq = -1
+        if type(_f0) is float: # use the number as the reference freq
+            iifreq = np.argmin(np.abs(bbdata_ref.index_map['freq']['centre'][:] - _f0))
+            offset_mhz = bbdata_ref.index_map["freq"]["centre"][iifreq] - _f0
+            print('INFO: Offset between requested frequency and closest frequency: {offset_mhz} MHz')
+        f0 = bbdata_ref.index_map['freq']['centre'][iifreq] # the actual reference frequency.
+
+        if _t0 == 'start':
+            t0 = bbdata_ref['time0']['ctime'][iifreq]  # the actual reference start time
+        if _t0 == 'middle':
+            t0= bbdata_ref['time0']['ctime'][iifreq] + bbdata_ref.ntime * 2.56e-6 // 2
+        return t0,f0
+        
     def define_scan_params(
         self,
-        t00_ref: float, 
-        freq_offset_mode: str, 
-        time_offset_mode: str, 
+        ref_station = 'chime',
+        t0f0 = ('start','top'),
+        start_or_toa = 'start',
+        time_spacing = 'even',
+        freq_offset_mode = 'bbdata',
+        Window = np.ones(1024,dtype = int) * 1000,
         **kwargs
     ):
-    """
-    kwargs : 'dm' and 'f0', 'period', 'pdot','wi'
-    """
+        """
+        Tells the correlator_core when to start integrating, how long to start integrating, for each station.
+
+        start_time_mode : 'start' or 'toa'
+        time_spacing : 'even', or 'p+pdot'
+        freq_offset_mode : 'bbdata', or 'dm'
+        width : 'fixed', 'from_time'
+        kwargs : 'dm' and 'f0', 'period', 'pdot','wi'
+        """
         t_ij_ref = []
         r_ij = []
         w_ij = []
 
-        # First do t_aij for the reference station...
-        if freq_offset_mode == "dm":
-            _ti0 = ti0_from_t00_dm(t00_ref, **kwargs["dm"], **kwargs["f0"])
-        if freq_offset_mode == "bbdata":
-            _ti0 = _ti0_from_t00_bbdata
+        # First: if t0f0 is a bunch of strings, then get t0 & f0 from the BBData. 
+        if type(t0f0[0]) is not float and type(t0f0[1]) is not float:
+            t0, f0 = t0_f0_from_bbdata(self,t0f0, bbdata)
+        else:
+            (t0, f0) = t0f0
 
-        if time_offset_mode == "period":
-            _tij = tij_from_ti0_period(_ti0, period_i, bbdata_a, bbdata_b)
-        if time_offset_mode == "p+pdot":
-            _tij = tij_from_ti0_ppdot(_ti0, period_i, bbdata_a, bbdata_b)
+        # First do t_aij for the reference station...
+        if freq_offset_mode == "bbdata":
+            _ti0 = _ti0_from_t00_bbdata(t0_ref_freq)
+        if freq_offset_mode == "dm":
+            _ti0 = _ti0_from_t00_dm(t0, f0, dm = kwargs["dm"], fi = FREQ)
+
+        # If _ti0 is a TOA, need to shift _ti0 back by half a scan length
+        if start_time_mode == 'toa':
+            _ti0 -= Window  / 2
+
+        # Allow evenly spaced gates, or start times that get later and later (pdot).
+        if time_spacing == "even":
+            _tij = _ti0_even_spacing(_ti0, period_i, bbdata_a, bbdata_b)
+        if time_spacing == "p+pdot":
+            _tij = _ti0_ppdot(_ti0, period_i, bbdata_a, bbdata_b)
 
         for station in np.arange(len(self.tel_names)):
             _rij = np.ones_like(_tij)
             _wij = wij(t_ij, r_ij, dm=dm)
 
-        freq = np.linspace(800, 400, num=1024, endpoint=False)
         return t_ij, r_ij, w_ij
 
-    def ti0_from_t00_dm(t00, f0, t0, dm, fi, bbdata):
+    def _ti0_from_t00_bbdata(bbdata_filename, t_00,f0,frame_offset = 0):
+        """Returns ti0 such that it aligns with the start frame of each channel in the bbdata (potentially with a constant frame_offset > 0 for all channels).
+
+        This always returns 1024 start times, since different baselines might have different amounts of frequency coverage.
+
+        Parameters
+        ----------
+        bbdata_a : A BBData object used to define the scan start
+
+        frame_offset : int
+            An integer number of frames (must be non0-negative) to skip.
+
+        Returns
+        -------
+        ti0 : np.array of shape (1024,)
+        """
+        im_freq= misc.get_all_im_freq(bbdata_filename)
+        t0 = misc.get_all_time0(bbdata_filename)
+        iifreq = np.argmin(np.abs(im_freq["centre"][:] - f0))
+        sparse_ti0 = t0['ctime'][:] + (t_00 - t0['ctime'][iifreq]) # ti0 if these were all the frequencies we cared about. easy!
+
+        #...but, we always need all 1024 frequencies! need to interpolate reasonably.
+        ti0 = extrapolate_to_full_band(sparse_ti0, im_freq['id'][:])
+        return round_to_integer_frame(ti0, bbdata_a)
+
+    def _ti0_from_t00_dm(t00, f0, dm, fi):
         ti0 = t00 + K_DM * dm * (fi**-2 - f0**-2)  # for fi = infinity, ti0 < t00.
         return round_to_integer_frame(ti0, bbdata)
 
-    def round_to_integer_frame(timestamps, bbdata):
+    def round_to_integer_frame(timestamps, bbdata,precision = 'ctime'):
         timestamps_rounded = np.zeros_like(timestamps)
-        for iifreq in range(1024):
-            int_offset = round((timestamps - bbdata["time0"]["ctime"][:]) / 2.56e-6)
+        freq_id_present = timestamps[bbdata.index_map['freq']['id'][:]]
+        int_offset = round((timestamps[freq_id_present] - bbdata["time0"]["ctime"][:]) / 2.56e-6).astype(int)
+        if precision == 'ctime':
+            timestamps_rounded[freq_id_present] = bbdata["time0"]["ctime"][:]+ int_offset * 2.56e-6
+        if precision == 'ctime_offset':
+            raise NotImplementedError('Need to do astropy.Time arithmetic to figure out the true times.')
+        return timestamps_rounded
 
-            timestamps_rounded[iifreq] = timestamps + int_offset * 2.56e-6
-        return timestamps
+    def extrapolate_to_full_band(time, freq_ids):
+        interpolant = interp1d(
+            x=freq_ids,
+            y=time, 
+            kind="nearest",
+            fill_value=(time[0], time[-1]),
+            bounds_error=False,
+        )  # Nearest neighbor interpolation for fpga_start_time. This should not really matter.
+        return interpolant(np.arange(1024))
 
-    def ti0_from_t00_bbdata(bbdata_a, bbdata_b):
-        unix_a = np.zeros(1024)
-        unix_b = np.zeros(1024)
-        unix_a[bbdata_a.index_map["freq"]["id"]] = bbdata_a["time0"]["ctime"][:]
-        unix_b[bbdata_b.index_map["freq"]["id"]] = bbdata_b["time0"]["ctime"][:]
-
-        # ti0 = np.max(unix_a + tau_at_time0, unix_b)  # use this if we fringestop A
-        ti0 = np.maximum(unix_a, unix_b - tau_at_time0)  # use this if we fringestop B
-        # also might need to change the + to a - or vice versa
-        return round_to_integer_frame(ti0, bbdata_a)
-
-    def tij_from_ti0_period(ti0, period_i, bbdata_a, bbdata_b):
+    def _ti0_even_spacing(self, ti0, bbdata, period, num_scans_before = 'max', num_scans_after = 'max',ordered = False):
         """
-        ti0 : float64
+        ti0 : np.array of float64s
             Containing start times at station A, good to 2.56 us.
-        period_i : float or 1d-array
+        period : float 
             Spacing between successive scans in frames.
-        bbdata_a : BBData object.
+        bbdata : BBData object.
         """
-        period_i = np.atleast_1d(period_i)
-        valid_a = bbdata_a["time0"]["ctime"][:] + 2.56e-6 * bbdata_a.ntime - ti0
-        valid_b = bbdata_b["time0"]["ctime"][:] + 2.56e-6 * bbdata_b.ntime
-        n_time = np.minimum(valid_a, valid_b) / period_i
-        tij = ti0[:, None] + np.arange(n_time)[None, :] * period_i[:, None]
+        
+        if num_scans_before == 'max': # attempt to use the whole dump
+            start_time = extrapolate_to_full_band(bbdata['time0']['ctime'][:],
+                                                bbdata.index_map['freq']['id'][:]
+                                                )
+            num_scans_per_freq = (ti0 - start_time) // (2.56e-6 * period)
+            num_scans_before = np.max(num_scans_per_freq)
+
+        if num_scans_after == 'max': # attempt to use the whole dump
+            end_time = extrapolate_to_full_band(bbdata['time0'][:] + 2.56e-6 * bbdata.ntime,
+                                                bbdata.index_map['freq']['id'][:]
+                                                )
+            num_scans_per_freq = (end_time - ti0) // (2.56e-6 * period)
+            num_scans_after = np.max(num_scans_per_freq) - 1 # minus one, since "num_scans_after" does not include the scan starting at ti0.
+        scan_numbers = np.hstack((np.arange(0,num_scans_after),
+                                  np.arange(-num_scans_before,0))
+                                ) 
+        # this makes the scan number corresponding to ti0 come first in the array: e.g. if the on-pulse comes in the 5th scan period, the t_ij array is ordered as (5,6,7,...0,1,2,3,4)
+        if ordered: # this makes the scans time-ordered, e.g. 0,1,2,3,...8,9.
+            scan_numbers = sorted(scan_numbers) 
+
+        tij = ti0[:, None] + scan_numbers[None, :] * period_i[:, None]
         return round_to_integer_frame(tij, bbdata_a)
 
-    def wij(t_ij, r_ij, dm=None):
+    def tij_other_stations(self, tij, ref_station = 'chime'):
+        """Do this on a per-pointing and per-station basis."""
+        iiref = self.telescopes.index(ref_station)
+        tij_sp = np.zeros(
+            (len(self.telescopes),
+             1024,
+            len(self.pointings),
+            tij.shape[-1]
+            ),
+            dtype = float) 
+            # tij_sp.shape = (n_station, n_freq, n_pointing, n_time)
+
+        for iitel, telescope in enumerate(self.telescopes):
+            for jjpointing, pointing in enumerate(self.pointings):
+                tau_ij = self.calcresults.baseline_delay(
+                    ant_1 = iiref, 
+                    ant_2 = iitel,
+                    times = tij.flatten(),
+                    src = jjpointing).reshape(tij.shape)
+                tij_sp[iitel,:,jjpointing,:] = tij + tau_ij
+
+        return tij_sp
+
+    def wij(self, t_ij, r_ij, dm=None):
         # Perform some checks on w_ij.
         # w_ij < earth rotation timescale, since we only calculate one integer delay per scan. Each scan is < 0.4125 seconds.
         # w_ij > DM smearing timescale, if we are using coherent dedispersion.
@@ -264,10 +377,10 @@ if __name__ == "__main__":
         job = CalcJob()
 
         # steady source: Use a duty cycle of 1 (width = 1) and integrate over the full gate (subwidth = 1)
-        t_ij, w_ij, r_ij = job.define_scan_params(t00: unix_time, period_i = 0.005 sec, freq_offset_mode = 'bbdata', time_offset_mode = 'period', dm = 500)
+        t_ij, w_ij, r_ij = job.define_scan_params(t00: unix_time, period_i = 0.005 sec, freq_offset_mode = 'bbdata', time_spacing = 'period', dm = 500)
 
         # pulsar or FRB: Set the period to the pulsar period, use frequency offset based on dispersion measure of the pulsar, and integrate over a small fraction of the full gate (subwidth = 0.2):
-        t_ij, w_ij, r_ij = job.define_scan_params(t00: unix_time, period_i = 0.005 sec, freq_offset_mode = 'dm', time_offset_mode = 'period', dm = 500, width = 1, subwidth = 0.5)
+        t_ij, w_ij, r_ij = job.define_scan_params(t00: unix_time, period_i = 0.005 sec, freq_offset_mode = 'dm', time_spacing = 'period', dm = 500, width = 1, subwidth = 0.5)
 
         # make any modifications to t_ij, w_ij, or r_ij as necessary in your Jupyter notebook...
 
@@ -299,11 +412,12 @@ if __name__ == "__main__":
         default='./vis.h5',
     )
     cmdargs = parser.parse_args()
+    job = CorrelatorJob(bbdata_filepaths, ref_station = 'chime',ras = cmdargs.ra, decs = cmdargs.dec)
     t_ij, w_ij, r_ij = job.define_scan_params(
         t00=cmdargs.t00,  # unix
         period_i=0.005,  # seconds
         freq_offset_mode=cmdargs.time_offset,
-        time_offset_mode=cmdargs.freq_offset,
+        time_spacing=cmdargs.freq_offset,
         dm=500,  # pc cm-3
     )
     if parallel:
