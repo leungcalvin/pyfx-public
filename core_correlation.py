@@ -18,7 +18,7 @@ def autocorr_core(DM, bbdata_A, T_A, Window, R, max_lag=None,n_pol=2):
     """
     n_freq = len(bbdata_A.freq)
     n_scan = np.size(T_A,axis=-1)
-    n_pointings=bbdata_A["tiedbeam_baseband"].shape[1] // 2 ## SA: basing this off of how the data is arranged now, may want to change
+    n_beams =bbdata_A["tiedbeam_baseband"].shape[1] // 2 ## SA: basing this off of how the data is arranged now, may want to change
     
     if (type(R) is np.ndarray)==False:
         R=np.full(Window.shape, R)
@@ -28,13 +28,12 @@ def autocorr_core(DM, bbdata_A, T_A, Window, R, max_lag=None,n_pol=2):
             Window
         )  # in order to hold all autocorrelations, there must be one max lag for all frequencies and times.
     
-    vis_shape = (n_freq, n_pointings, n_pol, n_pol, n_scan, 2 * max_lag + 1)
-    # autocorr = np.zeros((n_freq, n_pol, n_pol, n_lag, n_time))
+    vis_shape = (n_freq, n_beams, n_pol, n_pol, n_scan, 2 * max_lag + 1)
     auto_vis = np.zeros(vis_shape, dtype=bbdata_A['tiedbeam_baseband'].dtype)
 
     ## will compress this horrific number of for loops later
-    for pointing in range(n_pointings):
-        for iifreq in range(n_freq):  
+    for iifreq in range(n_freq):  
+        for iibeam in range(n_beam):
             for iipol in range(n_pol):
                 for jjpol in range(n_pol):
                     for iitime in range(n_scan):
@@ -48,21 +47,21 @@ def autocorr_core(DM, bbdata_A, T_A, Window, R, max_lag=None,n_pol=2):
                         _vis = fft_corr(
                             bbdata_A['tiedbeam_baseband'][
                                 iifreq,
-                                iipol,
+                                iibeam + iipol,
                                 start : stop,
                             ],
                             bbdata_A['tiedbeam_baseband'][
                                 iifreq,
-                                jjpol,
+                                iibeam + jjpol,
                                 start : stop,
                             ])
-                        auto_vis[iifreq, pointing, iipol, jjpol, iitime,:] = np.concatenate((_vis[:max_lag+1],_vis[-max_lag:]))
+                        auto_vis[iifreq, iibeam, iipol, jjpol, iitime,:] = np.concatenate((_vis[:max_lag+1],_vis[-max_lag:]))
 
 
     return auto_vis
 
 
-def crosscorr_core(bbdata_A, bbdata_B, T_A, Window, R, calc_results,DM,index_A=0, index_B=1,sample_rate=2.56,max_lag=None,n_pol=2):
+def crosscorr_core(bbdata_A, bbdata_B, T_A, Window, R, calc_results,DM,index_A=0, index_B=1,sample_rate=2.56,max_lag=None,n_pol=2,complex_conjugate_convention = -1, intra_channel_sign = 1):
     """
     inputs:
     bbdata_A - telescope A data (sliced into a frequency chunk)
@@ -121,7 +120,7 @@ def crosscorr_core(bbdata_A, bbdata_B, T_A, Window, R, calc_results,DM,index_A=0
                 
                 ### Fringestopping B -> A  
                 scan_a, scan_b_fs = get_aligned_scans(
-                    bbdata_A, bbdata_B,T_A_index, w_ij, geodelay, freq_id=iifreq,sample_rate=sample_rate
+                    bbdata_A, bbdata_B,T_A_index, w_ij, geodelay, freq_id=iifreq,intra_channel_sign = intra_channel_sign, sample_rate=sample_rate
                 )
 
                 #######################################################
@@ -205,7 +204,7 @@ intra_channel_sign=1):
     return data2
     
                 
-def get_aligned_scans(bbdata_A, bbdata_B,T_A_index, wij, tau,freq_id, sample_rate=2.56):
+def get_aligned_scans(bbdata_A, bbdata_B,T_A_index, wij, tau,freq_id,intra_channel_sign, sample_rate=2.56):
     """For a single frequency corresponding to a given FPGA freq_id, returns aligned scans of data for that freq_id out of two provided BBData objects.
 
     bbdata_A : BBData
@@ -250,7 +249,6 @@ def get_aligned_scans(bbdata_A, bbdata_B,T_A_index, wij, tau,freq_id, sample_rat
 
     time_we_want_at_b = tau[0] #us
     aligned_a = bbdata_A['tiedbeam_baseband'][freq_id,...,T_A_index:T_A_index + wij]
-    aligned_b = np.zeros(bbdata_B['tiedbeam_baseband'][freq_id].shape,dtype=bbdata_B['tiedbeam_baseband'].dtype) #initialize aligned B array
     ## calculate the additional offset between A and B in the event that the (samples points of) A and B are misaligned in absolute time by < 1 frame
     ## i.e. to correctly fringestop, we must also account for a case such as:
     ## A:    |----|----|----|----|----| ##
@@ -278,6 +276,8 @@ def get_aligned_scans(bbdata_A, bbdata_B,T_A_index, wij, tau,freq_id, sample_rat
     if correction_factor > 2:
          # warn the user that the boundary conditions are sketch if we are missing e.g. more than half the data.
          print("warning: based on specified start time and scan length, over half the data is missing from telescope XX.")
+    aligned_b_shape = (2, wij + pad_index_b)
+    aligned_b = np.zeros(aligned_b_shape,dtype=bbdata_B['tiedbeam_baseband'].dtype) #initialize aligned B array
     aligned_b[...,pad_index_b:pad_index_b+new_wij] = bbdata_B['tiedbeam_baseband'][freq_id,...,start_index_we_have_at_b:start_index_we_have_at_b+new_wij] * correction_factor 
     # multiply by the correction factor to ensure that a steady source, when correlated, has the correct flux corresponding to the desired w_ij, even when we run out of data.
     aligned_b=aligned_b[...,:wij]
@@ -292,5 +292,6 @@ def get_aligned_scans(bbdata_A, bbdata_B,T_A_index, wij, tau,freq_id, sample_rat
         f0=bbdata_B.index_map["freq"]["centre"][freq_id],
         sub_frame_tau=sub_frame_tau,
         sample_rate=sample_rate,
-        freq_id=freq_id)
+        freq_id=freq_id,
+        intra_channel_sign = intra_channel_sign)
     return aligned_a, aligned_b
