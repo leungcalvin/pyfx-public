@@ -391,13 +391,6 @@ class CorrJob:
             ant1=ii_ref, ant2=index(telescope), time=ti0, src=self.src
         )
 
-    def choose_beam_idx_from_pointing(pointing_ra, pointing_dec, tiedbeam_ra, tiedbeam_dec,tolerance_deg = 2/60):
-    assert type(pointing_ra) is float, "One pointing a time!"
-    assert type(pointing_dec) is float, "One pointing at a time!"
-    pairwise_distances_deg = ((pointing_ra - tiedbeam_ra)**2 + (pointing_dec - tiedbeam_dec)**2 * np.cos(pointing_dec * np.pi / 180) **2 )**0.5
-    assert np.min(pairwise_distances_deg) < tolerance_deg, "No suitable beam found for correlator pointing."
-    return np.argmin(pairwise_distances_deg)
-
     def run_correlator_job(t_ij, w_ij, r_ij, dm, event_id = None, out_h5_file = None):
         """Loops over baselines, then frequencies, which are all read in at once. This works on short baseband dumps.
 
@@ -427,7 +420,6 @@ class CorrJob:
                         telescope_a = self.telescopes[iia],
                         telescope_b = self.telescopes[iib],
                         cross = vis,
-                        integration_time,
                     )
                 del bbdata_b # free up space in memory
             del bbdata_a
