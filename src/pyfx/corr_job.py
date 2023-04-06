@@ -140,7 +140,7 @@ def validate_wij(w_ij, t_ij, r_ij, dm=None):
     # overlapping sub-integrations: 
     sub_scan_start = t_ij + 2.56e-6 * (w_ij // 2 - (w_ij * r_ij / 2))
     sub_scan_end = t_ij + 2.56e-6 * (w_ij // 2 + (w_ij * r_ij / 2))
-    assert (sub_scan_end[:,iisort][:,0:-1] <= sub_scan_start[:,iisort][:,1:]).all(), "previous scan ends AFTER next one starts? you probably do not want this"
+    assert (sub_scan_end[:,iisort][:,0:-1] <= sub_scan_start[:,iisort][:,1:] + 2.56e-6).all(), "previous scan ends AFTER next one starts? you probably do not want this" # add 1 frame of buffer here to make this lenient
     
     # no changing integer lags
     earth_rotation_time = 0.4125  # seconds https://www.wolframalpha.com/input?i=1.28+us+*+c+%2F+%28earth+rotation+speed+*+2%29
@@ -360,12 +360,12 @@ class CorrJob:
         
         validate_wij(Window,_tij, r_ij, dm = dm)
         print('Success: generated a valid set of integrations! Now call run_correlator_job() or run_correlator_job_multiprocessing()')
-        t_ij_station_pointing = self.tij_other_stations(tij, ref_station = ref_station)
+        t_ij_station_pointing = self.tij_other_stations(_tij, ref_station = ref_station)
         return t_ij_station_pointing,  Window, r_ij
 
     def tij_other_stations(self, tij, ref_station = 'chime'):
         """Do this on a per-pointing and per-station basis."""
-        iiref = self.telescopes.index(ref_station)
+        iiref = self.tel_names.index(ref_station)
         tij_sp = np.zeros(
             (len(self.telescopes),
              1024,
@@ -378,18 +378,13 @@ class CorrJob:
         for iitel, telescope in enumerate(self.telescopes):
             for jjpointing, pointing in enumerate(self.pointings):
                 tau_ij = self.calcresults.baseline_delay(
-                    ant_1 = iiref, 
-                    ant_2 = iitel,
-                    times = tij.flatten(),
-                    src = jjpointing).reshape(tij.shape)
+                    ant1 = iiref, 
+                    ant2 = iitel,
+                    time = Time(tij.flatten(),format = 'unix'),
+                    src = jjpointing,
+                    ).reshape(tij.shape)
                 tij_sp[iitel,:,jjpointing,:] = tij + tau_ij
-
         return tij_sp
-
-    def ti0_at_other_station(telescope):
-        self.calcresults.baseline_delay(
-            ant1=ii_ref, ant2=index(telescope), time=ti0, src=self.src
-        )
 
     def run_correlator_job(t_ij, w_ij, r_ij, dm, event_id = None, out_h5_file = None):
         """Loops over baselines, then frequencies, which are all read in at once. This works on short baseband dumps.
@@ -399,7 +394,20 @@ class CorrJob:
         for iia in range(len(self.tel_names)):
             bbdata_a = BBData.from_file(self.bbdata_filepaths[iia])
             auto_vis = autocorr_core(dm, bbdata_a, T_A = t_ij, Window = w_ij, R = r_ij, max_lag = self.max_lag, n_pol = 2)
-            output._from_ndarray_station(auto_vis)
+            int_time = np.zeros(shape = t_ij[iia].shape, dtype = output._dataset_dtypes['time'])
+            int_time["ctime"][:] = t_ij[iia]
+            int_time["duration_frames"][:] = w_ij
+            int_time["dur_ratio"][:] = r_ij
+            int_time["on_window"][:] = True
+            print('TODO: Specify on window in define_scan_params according to source type')
+
+            output._from_ndarray_station(
+                event_id,
+                telescope_a = self.telescopes[iia],
+                bbdata_a = bbdata_a,
+                auto = auto_vis,
+                integration_time = int_time,
+                )
 
             for iib in range(iia+1,len(self.tel_names)):
                 bbdata_b = BBData.from_file(self.bbdata_filepaths[iib])
