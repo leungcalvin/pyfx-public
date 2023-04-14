@@ -40,10 +40,15 @@ from astropy.time import Time
 import astropy.coordinates as ac
 import astropy.units as un
 from baseband_analysis.core import BBData
+from baseband_analysis.core.sampling import fill_waterfall
 from difxcalc_wrapper import io, runner, telescopes
 from difxcalc_wrapper.config import DIFXCALC_CMD
 from scipy.fft import fft, ifft, next_fast_len
+
+from core_correlation import autocorr_core, crosscorr_core
 from misc import station_from_bbdata, get_all_time0, get_all_im_freq, CALCFILE_DIR
+
+from coda.core import VLBIVis
 
 K_DM = 1 / 2.41e-4  # in s MHz^2 / (pc cm^-3)
 FREQ = np.linspace(800,400,num = 1024, endpoint = False)
@@ -117,13 +122,13 @@ def validate_wij(w_ij, t_ij, r_ij, dm=None):
     Parameters
     ----------
     w_ij : np.ndarray of ints
-        Integration length, in frames
+        Integration length, in frames, as a function of (n_freq, n_pointing, n_time)
 
     t_ij : np.ndarray of float64
-        UNIX time (in seconds)
+        UNIX time (in seconds) at which integration starts @ each station (n_station, n_freq, n_pointing, n_time)
 
     r_ij : np.ndarray of float64
-        A number between 0 and 1 denoting the sub-integration
+        A number between 0 and 1 denoting the sub-integration, (n_freq, n_pointing, n_time).
 
     Returns
     -------
@@ -136,11 +141,11 @@ def validate_wij(w_ij, t_ij, r_ij, dm=None):
     
     """
     assert w_ij.shape == t_ij.shape == r_ij.shape
-    iisort = np.argsort(t_ij[0,:])
+    iisort = np.argsort(t_ij[0,0,0,:]) # assume sorting of time windows is same for all stations, freq, and pointings
     # overlapping sub-integrations: 
     sub_scan_start = t_ij + 2.56e-6 * (w_ij // 2 - (w_ij * r_ij / 2))
     sub_scan_end = t_ij + 2.56e-6 * (w_ij // 2 + (w_ij * r_ij / 2))
-    assert (sub_scan_end[:,iisort][:,0:-1] <= sub_scan_start[:,iisort][:,1:] + 2.56e-6).all(), "previous scan ends AFTER next one starts? you probably do not want this" # add 1 frame of buffer here to make this lenient
+    assert (sub_scan_end[:,:,:,iisort][:,:,:,0:-1] <= sub_scan_start[:,:,:,iisort][:,:,:,1:] + 2.56e-6).all(), "previous scan ends AFTER next one starts? you probably do not want this" # add 1 frame of buffer here to make this lenient
     
     # no changing integer lags
     earth_rotation_time = 0.4125  # seconds https://www.wolframalpha.com/input?i=1.28+us+*+c+%2F+%28earth+rotation+speed+*+2%29
@@ -304,6 +309,7 @@ class CorrJob:
         time_ordered = False,
         pdot = 0,
         dm = None,
+        max_lag = 20,
     ):
         """
         Tells the correlator when to start integrating, how long to start integrating, for each station. Run this after the CorrJob() is instantiated.
@@ -317,9 +323,16 @@ class CorrJob:
             Interpret the given time as a start time or a "center" time.
         time_spacing : 'even', or 'p+pdot'
             Equal number of gates
-        Window : np.ndarray
+        
         freq_offset_mode : 'bbdata', or 'dm'
+        
         width : 'fixed', 'from_time'
+        
+        Window : np.ndarray
+            Sets the integration duration in frames as a function of frequency.
+        dm : float
+            A dispersion measure for gating. Get this right to the 2-3rd decimal place.
+        
         kwargs : 'dm' and 'f0', 'period_frames', 'pdot','wi'
         """
         # First: if t0f0 is a bunch of strings, then get t0 & f0 from the BBData. 
@@ -345,6 +358,9 @@ class CorrJob:
             period_frames = Window
 
         # Next do t_ij for the reference station from t_i0.
+        period_frames = np.atleast_1d(period_frames)
+        if period_frames.size == 1:
+            period_frames = np.zeros(1024) + period_frames
 
         # Allow evenly spaced gates...
         if time_spacing == "even":
@@ -352,15 +368,18 @@ class CorrJob:
         if time_spacing == "p+pdot": #...or start times that get later and later (pdot).
             _tij = _ti0_ppdot(_ti0, period_i, bbdata_a, bbdata_b)
 
-        # Check that the time spacing works.
-        if Window.ndim == 1: # broadcast to the shape of tij
-            Window = Window[:,None] + np.zeros_like(_tij)
-        if r_ij.ndim == 1: # broadcast to the shape of tij
-            r_ij = r_ij[:,None] + np.zeros_like(_tij)
-        
-        validate_wij(Window,_tij, r_ij, dm = dm)
         print('Success: generated a valid set of integrations! Now call run_correlator_job() or run_correlator_job_multiprocessing()')
         t_ij_station_pointing = self.tij_other_stations(_tij, ref_station = ref_station)
+        
+        # Check that the time spacing works.
+        if Window.ndim == 1: # broadcast to the shape of tij
+            Window = Window[:,None,None] + np.zeros_like(t_ij_station_pointing)
+        if r_ij.ndim == 1: # broadcast to the shape of tij
+            r_ij = r_ij[:,None,None] + np.zeros_like(t_ij_station_pointing)
+        
+        validate_wij(Window,t_ij_station_pointing, r_ij, dm = dm)
+
+        self.max_lag = max_lag
         return t_ij_station_pointing,  Window, r_ij
 
     def tij_other_stations(self, tij, ref_station = 'chime'):
@@ -386,39 +405,60 @@ class CorrJob:
                 tij_sp[iitel,:,jjpointing,:] = tij + tau_ij
         return tij_sp
 
-    def run_correlator_job(t_ij, w_ij, r_ij, dm, event_id = None, out_h5_file = None):
-        """Loops over baselines, then frequencies, which are all read in at once. This works on short baseband dumps.
+    def run_correlator_job(self,t_ij, w_ij, r_ij, dm = None, event_id = None, out_h5_file = None):
+        """Run auto- and cross- correlations.
 
-        I/O strategy: memory cost is 2 x BBData, but I/O cost is N*(N-1) / 2 x BBData."""
+        Loops over baselines, then frequencies, which are all read in at once and ordered using fill_waterfall. This works well on short baseband dumps. 
+        Memory cost: 2 x BBData, 
+        I/O cost:N*(N-1) / 2 x BBData.
+
+        Parameters
+        ----------
+        t_ij : np.ndarray
+            Of start times as a function of (n_station, n_freq, n_pointing, n_time)
+        w_ij : np.ndarray
+            Of start times as a function of (n_station, n_freq, n_pointing, n_time)
+        r_ij : np.ndarray
+            Of start times as a function of (n_station, n_freq, n_pointing, n_time)
+        dm : float
+            A dispersion measure for de-smearing. Fractional precision needs to be 10%.
+        """
         output = VLBIVis()
         for iia in range(len(self.tel_names)):
             bbdata_a = BBData.from_file(self.bbdata_filepaths[iia])
-            auto_vis = autocorr_core(dm, bbdata_a, T_A = t_ij, Window = w_ij, R = r_ij, max_lag = self.max_lag, n_pol = 2)
+            fill_waterfall(bbdata_a, write = True)
+            auto_vis = autocorr_core(dm, bbdata_a, 
+                                    T_A = t_ij[iia], 
+                                    Window = w_ij[iia], 
+                                    R = r_ij[iia], 
+                                    max_lag = self.max_lag, 
+                                    n_pol = 2)
             int_time = np.zeros(shape = t_ij[iia].shape, dtype = output._dataset_dtypes['time'])
             int_time["ctime"][:] = t_ij[iia]
-            int_time["duration_frames"][:] = w_ij
-            int_time["dur_ratio"][:] = r_ij
+            int_time["duration_frames"][:] = w_ij[iia]
+            int_time["dur_ratio"][:] = r_ij[iia]
             int_time["on_window"][:] = True
             print('TODO: Specify on window in define_scan_params according to source type')
 
             output._from_ndarray_station(
                 event_id,
-                telescope_a = self.telescopes[iia],
-                bbdata_a = bbdata_a,
+                telescope = self.telescopes[iia],
+                bbdata = bbdata_a,
                 auto = auto_vis,
                 integration_time = int_time,
                 )
 
             for iib in range(iia+1,len(self.tel_names)):
                 bbdata_b = BBData.from_file(self.bbdata_filepaths[iib])
+                fill_waterfall(bbdata_b, write = True)
                 vis = crosscorr_core(
                         bbdata_a, 
                         bbdata_b, 
-                        t_ij, 
-                        w_ij, 
-                        r_ij, 
+                        t_ij[iia], 
+                        w_ij[iia], 
+                        r_ij[iia], 
                         self.calcresults, 
-                        DM, 
+                        DM = dm, 
                         max_lag = self.max_lag, 
                         complex_conjugate_convention = -1, 
                         intra_channel_sign = 1
