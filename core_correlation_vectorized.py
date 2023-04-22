@@ -21,9 +21,10 @@ def autocorr_core_vectorized(
     t_a: np.ndarray, 
     window: Union[np.ndarray, int],
     R: Union[np.ndarray, float], 
-    max_lag=None, 
-    n_pol=2):
+    max_lag: int=None, 
+    n_pol: int=2):
     ## assumes window is constant and R varies vs time
+    ## this is not yet properly vectorized for variable t_a
     """Correlates and downselects over lag (potentially more lags at shorter integration times
     DM - the DM with which we de-smear the data before the final gating. for steady sources, set dispersion measure to 0.
     bbdata_A - baseband data
@@ -58,25 +59,52 @@ def autocorr_core_vectorized(
                         window_jjscan=window[jjscan]
                     
                     t_a_indices = t_a[:, jjscan]  # array of length 1024
-                    r_ij = R[jjscan] #np.array of length 1024
 
-                    start = int((window_jjscan - window_jjscan*r_ij) // 2)
-                    stop = int((window_jjscan + window_jjscan*r_ij) // 2)
+                    if type(R)==int: #should be 1 for steady sources
+                        r_jjscan=R
+                    elif len(np.unique(R[:,jjscan]))==1:
+                        r_jjscan=R[0,jjscan] 
 
-                    _vis = fft_corr(
-                        bbdata_A['tiedbeam_baseband'][
-                            iifreq,
-                            iipol,
-                            start: stop,
-                        ],
-                        bbdata_A['tiedbeam_baseband'][
-                            iifreq,
-                            jjpol,
-                            start: stop,
-                        ])
-                    auto_vis[iifreq, pointing, iipol, jjpol, iitime, :] = np.concatenate(
-                        (_vis[:max_lag+1], _vis[-max_lag:]))
+                    else: # "on" window varies as a function of frequency (e.g. pulsar)
+                        r_jjscan=R[:,jjscan] #np array of size (nfreq)
+                        if len(np.unique(r_jjscan))==1:
+                            r_jjscan=r_jjscan[0]
 
+                    if (type(r_jjscan)==float or type(r_jjscan)==int) and len(np.unique(t_a_indices))==1:
+                        r_ij=r_jjscan
+                        start = int((window_jjscan - window_jjscan*r_ij) // 2)+t_a_indices[0]
+                        stop = int((window_jjscan + window_jjscan*r_ij) // 2)+t_a_indices[0]
+
+                        _vis = fft_corr(
+                            bbdata_A['tiedbeam_baseband'][
+                                :,
+                                iipol,
+                                start: stop,
+                            ],
+                            bbdata_A['tiedbeam_baseband'][
+                                :,
+                                jjpol,
+                                start: stop,
+                            ])
+                        auto_vis[:, pointing, iipol, jjpol, jjscan, :] = np.concatenate((_vis[:,:max_lag+1], _vis[:,-max_lag:]),axis=-1)
+                    else:
+                        for iifreq,r_ij in enumerate(r_jjscan):
+                            start = int((window_jjscan - window_jjscan*r_ij) // 2)+t_a_indices[iifreq]
+                            stop = int((window_jjscan + window_jjscan*r_ij) // 2)+t_a_indices[iifreq]
+
+                            _vis = fft_corr(
+                                bbdata_A['tiedbeam_baseband'][
+                                    iifreq,
+                                    iipol,
+                                    start: stop,
+                                ],
+                                bbdata_A['tiedbeam_baseband'][
+                                    iifreq,
+                                    jjpol,
+                                    start: stop,
+                                ])
+                            auto_vis[iifreq, pointing, iipol, jjpol, jjscan, :] = np.concatenate(
+                                (_vis[:max_lag+1], _vis[-max_lag:]))
     return auto_vis
 
 def get_geodelay(start_time,window, ):
@@ -118,7 +146,7 @@ def crosscorr_core_vectorized(
     cross - array of autocorrelations and cross correlations with shape (pointing,freq, timechunk, pol, pol, delay)
 
     """
-    print("Call")
+    #assert (type(R)==float or type(R)==int or R.shape=(n_freq,n_scan)), 'R needs to either be a number (1 for steady sources) or a numpy array of size (nfreq, nscan)'                                                                            
     n_freq = len(bbdata_A.freq)
     n_scan = np.size(t_a, axis=-1)
     # SA: basing this off of how the data is arranged now, may want to change
@@ -182,13 +210,15 @@ def crosscorr_core_vectorized(
             ### the start and stop time indices for on-signal ######
             if type(R)==int: #should be 1 for steady sources
                 r_jjscan=R
-            elif len(np.unique(R[:jjscan]))==1:
+            elif len(np.unique(R[:,jjscan]))==1:
                 r_jjscan=R[0,jjscan] 
 
             else: # "on" window varies as a function of frequency (e.g. pulsar)
-                r_jjscan=R[:jjscan] #np array of size (nfreq)
+                r_jjscan=R[:,jjscan] #np array of size (nfreq)
+                if len(np.unique(r_jjscan))==1:
+                    r_jjscan=r_jjscan[0]
 
-            if type(r_jjscan)==int or type(r_jjscan)==float:    
+            if type(r_jjscan)==int or type(r_jjscan)==float:
                 r_ij=r_jjscan
                 start = int((window_jjscan - window_jjscan*r_ij) // 2)
                 stop = int((window_jjscan + window_jjscan*r_ij) // 2)
@@ -265,9 +295,14 @@ def get_aligned_scans_vectorized(bbdata_A, bbdata_B, t_a_index, wij, tau, comple
     start = time.time()
     aligned_a = np.zeros(a_shape, dtype=bbdata_A['tiedbeam_baseband'].dtype)
     # TODO vectorize
-    for i in range(len(t_a_index)):
-        aligned_a[i, ...] = bbdata_A['tiedbeam_baseband'][i, ...,
-                                                          t_a_index[i]:t_a_index[i] + wij]
+    if len(np.unique(t_a_index))==1:
+        print("X")
+        aligned_a[:, ...] = bbdata_A['tiedbeam_baseband'][:, ...,
+                                                          t_a_index[0]:t_a_index[0] + wij]
+    else:
+        for i in range(len(t_a_index)):
+            aligned_a[i, ...] = bbdata_A['tiedbeam_baseband'][i, ...,
+                                                            t_a_index[i]:t_a_index[i] + wij]
     end = time.time()
     print(f"Creating aligned_a: {end-start}")
 
