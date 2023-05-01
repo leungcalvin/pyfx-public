@@ -1,11 +1,16 @@
 from setuptools import find_packages, setup
+from Cython.Build import cythonize
 
 setup(
     name="pyfx",
     version="0.1.0",
     author="Calvin Leung",
     author_email="calvinleung@mit.edu",
-    packages=find_packages(),
+    # packages=find_packages(),
+    packages=['pyfx'],
+    package_dir = {
+        'pyfx': ''
+    },
     url="http://github.com/leungcalvin/pyfx",
     license="LICENSE.txt",
     description="A Python and HDF5-based VLBI correlator for widefield, transient VLBI",
@@ -21,4 +26,8 @@ setup(
         "difxcalc-wrapper",
     ],
     python_requires=">=3.6",
+    ext_modules = cythonize(
+        'core_math_c.pyx',
+        compiler_directives={'language_level' : "3"}
+    )
 )
