@@ -12,10 +12,14 @@ from pyfx.core_math import max_lag_slice
 from baseband_analysis.core.bbdata import BBData
 from difxcalc_wrapper.io import IMReader
 from typing import Optional, Tuple, Union
+import torch
 
 K_DM = 1 / 2.41e-4  # in s MHz^2 / (pc cm^-3)
 
-def autocorr_core_vectorized(
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+
+def autocorr_core_gpu(
     DM: float,
     bbdata_A: BBData,
     t_a: np.ndarray,
@@ -107,14 +111,11 @@ def autocorr_core_vectorized(
                                 (_vis[:max_lag+1], _vis[-max_lag:]))
     return auto_vis
 
-def get_geodelay(start_time,window, ):
-    geodelays = np.zeros((len(start_time), window), np.float64)
-
-def crosscorr_core_vectorized(
+def crosscorr_core_vectorized_gpu(
     bbdata_A: BBData,
     bbdata_B: BBData,
     t_a: np.ndarray,
-    window: Union[np.ndarray, float],
+    window: Union[np.ndarray, int],
     R: Union[np.ndarray, float],
     calc_results: IMReader,
     DM: float,
@@ -152,18 +153,34 @@ def crosscorr_core_vectorized(
     # SA: basing this off of how the data is arranged now, may want to change
     n_pointings = bbdata_A["tiedbeam_baseband"].shape[1] // 2
 
+    start = time.time()
+    baseband_a=torch.as_tensor(bbdata_A['tiedbeam_baseband'])
+    baseband_a=baseband_a.to(device)
+    baseband_b=torch.as_tensor(bbdata_B['tiedbeam_baseband'])
+    baseband_b=baseband_b.to(device)
+    f0=torch.as_tensor(bbdata_B.index_map["freq"]["centre"])
+    f0=f0.to(device)
+    end = time.time()
+    print(f"convert to torch: {end-start}")
+    
+    ctime_diff=bbdata_A["time0"]["ctime"]-bbdata_B["time0"]["ctime"]
+    ctime_offset_diff=bbdata_A["time0"]["ctime_offset"]-bbdata_B["time0"]["ctime_offset"]
+    delta_A_B=ctime_diff-ctime_offset_diff
+
+    #assert f0==bbdata_B.index_map["freq"]["centre"], "frequency values need to be same"
+
     # initialize output autocorrelations and cross correlations
     if max_lag is None:
         # in order to hold all autocorrelations, there must be one max lag for all frequencies and times.
         max_lag = 100
-
+        
     vis_shape = (n_freq, n_pointings, n_pol, n_pol, n_scan, 2 * max_lag + 1)
-    cross = np.zeros(vis_shape, dtype=bbdata_A['tiedbeam_baseband'].dtype)
+    cross = torch.zeros(vis_shape, dtype=baseband_a.dtype)
 
     for pointing in range(n_pointings):
         # require user to have "well-ordered" bbdata in frequency (iifreqA=iifreqB)
         # frequency centers in MHz # array of length 1024
-        f0 = bbdata_B.index_map["freq"]["centre"] #shape is (nfreq)
+        #shape is (nfreq)
         for jjscan in range(n_scan):
             if type(window)==int:
                 window_jjscan=window
@@ -171,16 +188,14 @@ def crosscorr_core_vectorized(
                 window_jjscan=window[jjscan]
 
             t_a_indices = t_a[:, jjscan]  # array of length 1024
-            t0_a = bbdata_A["time0"]["ctime"][:]
-            t0_a_offset=bbdata_A["time0"]["ctime_offset"][:]+ t_a_indices * (sample_rate*1e-6)  # array of length 1024
+            t0_a = bbdata_A["time0"]["ctime"][:] + t_a_indices * (sample_rate*1e-6)  # array of length 1024
 
             start_times = Time(
                 t0_a,
-                val2=t0_a_offset,
+                val2=bbdata_A["time0"]["ctime_offset"][:],
                 format="unix",
                 precision=9,
             )
-
             start_times._set_scale('tai')
             dt_vals=(sample_rate * 1e-6 * (t_a_indices[:, np.newaxis] + 1 + np.arange(window_jjscan)))
 
@@ -190,19 +205,19 @@ def crosscorr_core_vectorized(
             )
             geodelays = geodelays_flattened.reshape(dt_vals.shape)
             # Fringestopping B -> A
-            scan_a, scan_b_fs = get_aligned_scans_vectorized(
-                bbdata_A, bbdata_B, t_a_indices, window_jjscan, geodelays,
+
+            scan_a, scan_b_fs = get_aligned_scans_gpu(
+                baseband_a, baseband_b, f0,t_a_indices, window_jjscan, geodelays,delta_A_B,
                 complex_conjugate_convention=complex_conjugate_convention, intra_channel_sign=intra_channel_sign, sample_rate=sample_rate
             )
-
+            
             #######################################################
             ######### intrachannel de-dispersion ##################
             if DM==0: #save computation time
                 scan_a_cd = scan_a
                 scan_b_fs_cd = scan_b_fs
             else:
-                scan_a_cd = intrachannel_dedisp_vectorized(scan_a, DM, f0=f0)
-                scan_b_fs_cd = intrachannel_dedisp_vectorized(scan_b_fs, DM, f0=f0)
+                print("not yet implemented for pulses")
 
             #######################################################
             # Now that the pulses are centered at zero, calculate
@@ -229,8 +244,8 @@ def crosscorr_core_vectorized(
                             _vis = fft_corr(
                                 scan_a_cd[:, pol_0, start:stop],
                                 scan_b_fs_cd[:, pol_1, start:stop])
-                            cross[:, pointing, pol_0, pol_1, jjscan, :] = np.concatenate(
-                                (_vis[:,:max_lag+1], _vis[:,-max_lag:]),axis=-1)
+                            cross[:, pointing, pol_0, pol_1, jjscan, :] = torch.concat(
+                                (_vis[:,:max_lag+1], _vis[:,-max_lag:]),dim=-1)
             else:
                 for r_ij in r_jjscan:
                     start = int((window_jjscan - window_jjscan*r_ij) // 2)
@@ -243,19 +258,29 @@ def crosscorr_core_vectorized(
                                 _vis = fft_corr(
                                     scan_a_cd[:, pol_0, start:stop],
                                     scan_b_fs_cd[:, pol_1, start:stop])
-                                cross[:, pointing, pol_0, pol_1, jjscan, :] = np.concatenate(
-                                    (_vis[:,:max_lag+1], _vis[:,-max_lag:]),axis=-1)
+                                cross[:, pointing, pol_0, pol_1, jjscan, :] = torch.concat(
+                                    (_vis[:,:max_lag+1], _vis[:,-max_lag:]),dim=-1)
 
-    return cross
+    return cross.cpu().numpy()
 
-def get_aligned_scans_vectorized(bbdata_A, bbdata_B, t_a_index, wij, tau, complex_conjugate_convention=-1, intra_channel_sign=1, sample_rate=2.56):
+def get_aligned_scans_gpu(
+    baseband_a: torch.Tensor, 
+    baseband_b: torch.Tensor, 
+    f0: torch.Tensor,
+    t_a_index: np.ndarray, 
+    wij:np.ndarray, 
+    tau:np.ndarray,
+    delta_A_B: float,
+    complex_conjugate_convention: int=-1, 
+    intra_channel_sign:int=1, 
+    sample_rate:float=2.56):
     """For a single frequency corresponding to a given FPGA freq_id, returns aligned scans of data for that freq_id out of two provided BBData objects.
 
-    bbdata_A : BBData
-        A BBData object, with arbitrary frequency coverage.
+    baseband_a : torch.tensor
+        BBData['tiedbeam_baseband'] tensor, with arbitrary frequency coverage.
 
-    bbdata_B : BBData
-        A BBData object, with arbitrary frequency coverage. We apply a sub-frame phase rotation with fractional sample correction to data extracted out of bbdata_b.
+    baseband_b : torch.tensor
+        A BBData['tiedbeam_baseband], with arbitrary frequency coverage. We apply a sub-frame phase rotation with fractional sample correction to data extracted out of bbdata_b.
 
     t_a_index : np.array of shape (1024)
         An array of indices corresponding to the start frames for telescope A
@@ -288,11 +313,11 @@ def get_aligned_scans_vectorized(bbdata_A, bbdata_B, t_a_index, wij, tau, comple
     """
 
     time_we_want_at_b = tau[:, 0]  # us
-    a_shape = list(bbdata_A['tiedbeam_baseband'].shape)
+    a_shape = list(baseband_a.shape)
     a_shape[-1] = wij
 
     start = time.time()
-    aligned_a = np.zeros(a_shape, dtype=bbdata_A['tiedbeam_baseband'].dtype)
+    aligned_a = torch.zeros(a_shape, dtype=baseband_a.dtype)
     # TODO vectorize
     if len(np.unique(t_a_index))==1:
         aligned_a[:, ...] = bbdata_A['tiedbeam_baseband'][:, ...,
@@ -306,15 +331,12 @@ def get_aligned_scans_vectorized(bbdata_A, bbdata_B, t_a_index, wij, tau, comple
 
     # aligned_a = bbdata_A['tiedbeam_baseband'][freq_id,...,t_a_index:t_a_index + wij]
     # initialize aligned B array
-    aligned_b = np.zeros(
-        bbdata_B['tiedbeam_baseband'].shape, dtype=bbdata_B['tiedbeam_baseband'].dtype)
+    aligned_b = torch.zeros(
+        baseband_a.shape, dtype=baseband_a.dtype)
     # calculate the additional offset between A and B in the event that the (samples points of) A and B are misaligned in absolute time by < 1 frame
     # i.e. to correctly fringestop, we must also account for a case such as:
     ## A:    |----|----|----|----|----| ##
     ## B: |----|----|----|----|----|    ##
-    ctime_diff=bbdata_A["time0"]["ctime"]-bbdata_B["time0"]["ctime"]
-    ctime_offset_diff=bbdata_A["time0"]["ctime_offset"]-bbdata_B["time0"]["ctime_offset"]
-    delta_A_B=ctime_diff-ctime_offset_diff
 
     # TODO vectorize
     int_delay = np.array([int(np.round((timeb*1e-6 - delta) / (sample_rate*1e-6)))
@@ -345,22 +367,24 @@ def get_aligned_scans_vectorized(bbdata_A, bbdata_B, t_a_index, wij, tau, comple
     start = time.time()
     for i in range(len(pad_index_b)):
         aligned_b[i, ..., pad_index_b[i]:pad_index_b[i]+new_wij[i]] = \
-            bbdata_B['tiedbeam_baseband'][i, ...,start_index_we_have_at_b[i]:start_index_we_have_at_b[i]+new_wij[i]] * correction_factor[i]
+            baseband_b[i, ...,start_index_we_have_at_b[i]:start_index_we_have_at_b[i]+new_wij[i]] * correction_factor[i]
     end = time.time()
     print(f"updating aligned_b: {end-start}")
     # multiply by the correction factor to ensure that a steady source, when correlated, has the correct flux corresponding to the desired w_ij, even when we run out of data.
     aligned_b = aligned_b[..., :wij]
 
     time_we_have_at_b = (delta_A_B+int_delay*sample_rate*1e-6)  # s
-    start = time.time()
     sub_frame_tau = np.array([tau[i, :wij] - time_b*1e6 for time_b, i in zip(
         time_we_have_at_b, range(len(tau)))])  # sub-frame delay at start time in mircoseconds
+    start = time.time()
+    sub_frame_tau=torch.as_tensor(sub_frame_tau)
+    sub_frame_tau=sub_frame_tau.to(device)
     end = time.time()
     print(f"creating sub_frame_tau: {end-start}")
 
     start = time.time()
-    aligned_b = frac_samp_shift_vectorized(aligned_b,
-                                           f0=bbdata_B.index_map["freq"]["centre"][:],
+    aligned_b = frac_samp_shift_gpu(aligned_b,
+                                           f0=f0,
                                            sub_frame_tau=sub_frame_tau,
                                            complex_conjugate_convention=complex_conjugate_convention,
                                            intra_channel_sign=intra_channel_sign,
@@ -369,56 +393,11 @@ def get_aligned_scans_vectorized(bbdata_A, bbdata_B, t_a_index, wij, tau, comple
     print(f"Running frac_samp_shift_vectorized: {end-start}")
     return aligned_a, aligned_b
 
-# @nb.jit()
-#### NEEDS TO BE SPED UP
-def frac_samp_shift_vectorized(data, f0, sub_frame_tau, complex_conjugate_convention, intra_channel_sign, sample_rate=2.56):
-    """Fractional sample correction: coherently shifts data within a channel.
 
-    data : np.ndarray of shape (ntime)
-
-    f0 : frequency channel center.
-
-    sample_rate : sampling rate of data in microseconds
-
-    sub_frame_tau: np.array of shape (ntime), sub-frame delay in us
-
-    complex_conjugate_convention: a sign to account for the fact that the data may be complex conjugated
-
-    intra_channel_sign: a sign to account for a reflection of frequencies about zero (e.g. in iq/baseband data)
-
-    Applies a fractional phase shift of the form exp(2j*pi*f*sub_frame_tau) to the data.
-
-    ## need to rethink looping over frequency in the main function; this should take in an array of freqs
-    """
-    # glorified element wise multiplication
-    #data will be of shape (nfreq,npol,ntime)
+def frac_samp_shift_gpu(data, f0, sub_frame_tau, complex_conjugate_convention, intra_channel_sign, sample_rate=2.56):
     n = data.shape[-1]
-    f = np.fft.fftfreq(n, sample_rate)
-    # transfer_func is now of shape (nfreq,ntime)
-    transfer_func = np.exp(intra_channel_sign*2j * np.pi * f[np.newaxis,:] * np.median(sub_frame_tau,axis=-1)[:,np.newaxis])  # apply dphi/dfreq
-    return np.fft.ifft(
-            np.fft.fft(data, axis=-1) * transfer_func[:,np.newaxis,], axis=-1
-        ) * (np.exp(complex_conjugate_convention*2j * np.pi * f0[:,np.newaxis] * sub_frame_tau))[:, np.newaxis, :]   # apply phi
-
-def intrachannel_dedisp_vectorized(
-    data: np.ndarray,
-    DM: float,
-    f0: np.ndarray,
-    sample_rate: float = 2.56):
-    #### NOT YET TESTED
-    """Intrachannel dedispersion: brings data to center of channel.
-
-    This is Eq. 5.17 of Lorimer and Kramer 2004 textbook, but ONLY the last term (proportional to f^2), not the other two terms (independent of f and linearly proportional to f respectively).
-
-    data : np.ndarray of shape (nfreq,...,ntime)
-
-    f0 : np.ndarray of shape (nfreq) holding channel centers.
-
-    sample_rate : sampling rate of data in microseconds
-
-    TODO: use numba or GPU for this!"""
-    n = data.shape[-1]
-    f = np.fft.fftfreq(n) * sample_rate
-    transfer_func = np.exp(-2j * np.pi * K_DM * DM * f**2 / f0**2 / (f + f0))  # double check this minus sign -- might be a + instead in CHIME data.
-    data = np.fft.ifft(np.fft.fft(data, axis=-1) * transfer_func,axis=-1)
-    return data
+    f = torch.fft.fftfreq(n, sample_rate)
+    transfer_func = torch.exp(intra_channel_sign*2j * np.pi * f[np.newaxis,:] * torch.median(sub_frame_tau,dim=-1).values[:,np.newaxis])  # apply dphi/dfreq
+    return torch.fft.ifft(
+            torch.fft.fft(data) * transfer_func[:,np.newaxis]) * (torch.exp(complex_conjugate_convention*2j * np.pi * f0[:,np.newaxis] * sub_frame_tau))[:, np.newaxis, :]   # apply phi
+    
