@@ -48,7 +48,6 @@ def autocorr_core_vectorized(
     # autocorr = np.zeros((n_freq, n_pol, n_pol, n_lag, n_time))
     auto_vis = np.zeros(vis_shape, dtype=bbdata_A['tiedbeam_baseband'].dtype)
 
-    # will compress this horrific number of for loops later
     for pointing in range(n_pointings):
         for iipol in range(n_pol):
             for jjpol in range(n_pol):
@@ -106,9 +105,6 @@ def autocorr_core_vectorized(
                             auto_vis[iifreq, pointing, iipol, jjpol, jjscan, :] = np.concatenate(
                                 (_vis[:max_lag+1], _vis[-max_lag:]))
     return auto_vis
-
-def get_geodelay(start_time,window, ):
-    geodelays = np.zeros((len(start_time), window), np.float64)
 
 def crosscorr_core_vectorized(
     bbdata_A: BBData,
@@ -180,8 +176,15 @@ def crosscorr_core_vectorized(
                 format="unix",
                 precision=9,
             )
-
-            start_times._set_scale('tai')
+            '''geodelays=np.zeros((1024,window_jjscan),dtype=float)
+            for i in range(1024):
+                query_times = start_times[i] + sample_rate*1e-6 * un.s * (t_a_indices[i]+np.arange(window_jjscan)) #also calculating 100 frames ahead as cushion
+                # using telescope A times as reference time
+                ### should probably just call this once out of the for loop using np.flatten but will fix later
+                geodelays[i,:]=calc_results.retarded_baseline_delay(
+                    ant1=index_A, ant2=index_B, time=query_times, src=pointing,delay_sign=0,self_consistent=False
+                )
+            ## there is a rounding issue here'''
             dt_vals=(sample_rate * 1e-6 * (t_a_indices[:, np.newaxis] + 1 + np.arange(window_jjscan)))
 
             geodelays_flattened = calc_results.retarded_baseline_delay(
@@ -189,6 +192,7 @@ def crosscorr_core_vectorized(
                 frame_dt=dt_vals
             )
             geodelays = geodelays_flattened.reshape(dt_vals.shape)
+
             # Fringestopping B -> A
             scan_a, scan_b_fs = get_aligned_scans_vectorized(
                 bbdata_A, bbdata_B, t_a_indices, window_jjscan, geodelays,
@@ -209,8 +213,6 @@ def crosscorr_core_vectorized(
             ### the start and stop time indices for on-signal ######
             if type(R)==int: #should be 1 for steady sources
                 r_jjscan=R
-            elif len(np.unique(R[:,jjscan]))==1:
-                r_jjscan=R[0,jjscan]
 
             else: # "on" window varies as a function of frequency (e.g. pulsar)
                 r_jjscan=R[:,jjscan] #np array of size (nfreq)
@@ -225,12 +227,11 @@ def crosscorr_core_vectorized(
                 ########## cross-correlate the on-signal ##############
                 for pol_0 in range(n_pol):
                     for pol_1 in range(n_pol):
-                        if pol_0 == pol_1:
-                            _vis = fft_corr(
-                                scan_a_cd[:, pol_0, start:stop],
-                                scan_b_fs_cd[:, pol_1, start:stop])
-                            cross[:, pointing, pol_0, pol_1, jjscan, :] = np.concatenate(
-                                (_vis[:,:max_lag+1], _vis[:,-max_lag:]),axis=-1)
+                        _vis = fft_corr(
+                            scan_a_cd[:, pol_0, start:stop],
+                            scan_b_fs_cd[:, pol_1, start:stop])
+                        cross[:, pointing, pol_0, pol_1, jjscan, :] = np.concatenate(
+                            (_vis[:,:max_lag+1], _vis[:,-max_lag:]),axis=-1)
             else:
                 for r_ij in r_jjscan:
                     start = int((window_jjscan - window_jjscan*r_ij) // 2)
@@ -291,7 +292,6 @@ def get_aligned_scans_vectorized(bbdata_A, bbdata_B, t_a_index, wij, tau, comple
     a_shape = list(bbdata_A['tiedbeam_baseband'].shape)
     a_shape[-1] = wij
 
-    start = time.time()
     aligned_a = np.zeros(a_shape, dtype=bbdata_A['tiedbeam_baseband'].dtype)
     # TODO vectorize
     if len(np.unique(t_a_index))==1:
@@ -301,8 +301,6 @@ def get_aligned_scans_vectorized(bbdata_A, bbdata_B, t_a_index, wij, tau, comple
         for i in range(len(t_a_index)):
             aligned_a[i, ...] = bbdata_A['tiedbeam_baseband'][i, ...,
                                                             t_a_index[i]:t_a_index[i] + wij]
-    end = time.time()
-    print(f"Creating aligned_a: {end-start}")
 
     # aligned_a = bbdata_A['tiedbeam_baseband'][freq_id,...,t_a_index:t_a_index + wij]
     # initialize aligned B array
@@ -312,9 +310,23 @@ def get_aligned_scans_vectorized(bbdata_A, bbdata_B, t_a_index, wij, tau, comple
     # i.e. to correctly fringestop, we must also account for a case such as:
     ## A:    |----|----|----|----|----| ##
     ## B: |----|----|----|----|----|    ##
-    ctime_diff=bbdata_A["time0"]["ctime"]-bbdata_B["time0"]["ctime"]
-    ctime_offset_diff=bbdata_A["time0"]["ctime_offset"]-bbdata_B["time0"]["ctime_offset"]
-    delta_A_B=ctime_diff-ctime_offset_diff
+    
+    
+    t_a= Time(
+        bbdata_A["time0"]["ctime"][:],
+        val2=bbdata_A["time0"]["ctime_offset"][:],
+        format="unix",
+        precision=9)
+    t_b= Time(
+        bbdata_B["time0"]["ctime"][:],
+        val2=bbdata_B["time0"]["ctime_offset"][:],
+        format="unix",
+        precision=9)
+    delta_A_B=(t_b-t_a).to_value('sec') #this is actually not that time consuming for 1024 frequencies
+    '''ctime_diff=bbdata_B["time0"]["ctime"]-bbdata_A["time0"]["ctime"]
+    ctime_offset_diff=bbdata_B["time0"]["ctime_offset"]-bbdata_A["time0"]["ctime_offset"]
+    delta_A_B=ctime_diff+ctime_offset_diff'''
+
 
     # TODO vectorize
     int_delay = np.array([int(np.round((timeb*1e-6 - delta) / (sample_rate*1e-6)))
@@ -328,49 +340,37 @@ def get_aligned_scans_vectorized(bbdata_A, bbdata_B, t_a_index, wij, tau, comple
     # if index_we_have_at_b is negative, this will be the amount we need to cushion our output data by
     pad_index_b = start_index_we_have_at_b-start_index_we_want_at_b
     # TODO vectorize -- for pad, start in zip(pad_index_b, start_index_we_have_at_b)] is slow
-    start = time.time()
     w_pad = wij - pad_index_b
     ntime_start = bbdata_B.ntime - start_index_we_have_at_b
     new_wij = np.minimum(w_pad, ntime_start)
     # new_wij = np.array([np.min([wij-pad, bbdata_B.ntime-start])
     #                    for pad, start in zip(pad_index_b, start_index_we_have_at_b)])
-    end = time.time()
-    print(f"Creating new_wij: {end-start}")
     # if you are missing half the data, multiply by 2.
-    correction_factor = wij / new_wij
+    
+    correction_factor =new_wij/new_wij #wij / new_wij
     if correction_factor.any() > 2:
         # warn the user that the boundary conditions are sketch if we are missing e.g. more than half the data.
         print("warning: based on specified start time and scan length, over half the data is missing from telescope XX.")
 
-    start = time.time()
     for i in range(len(pad_index_b)):
         aligned_b[i, ..., pad_index_b[i]:pad_index_b[i]+new_wij[i]] = \
             bbdata_B['tiedbeam_baseband'][i, ...,start_index_we_have_at_b[i]:start_index_we_have_at_b[i]+new_wij[i]] * correction_factor[i]
-    end = time.time()
-    print(f"updating aligned_b: {end-start}")
     # multiply by the correction factor to ensure that a steady source, when correlated, has the correct flux corresponding to the desired w_ij, even when we run out of data.
     aligned_b = aligned_b[..., :wij]
 
     time_we_have_at_b = (delta_A_B+int_delay*sample_rate*1e-6)  # s
-    start = time.time()
     sub_frame_tau = np.array([tau[i, :wij] - time_b*1e6 for time_b, i in zip(
         time_we_have_at_b, range(len(tau)))])  # sub-frame delay at start time in mircoseconds
-    end = time.time()
-    print(f"creating sub_frame_tau: {end-start}")
 
-    start = time.time()
     aligned_b = frac_samp_shift_vectorized(aligned_b,
                                            f0=bbdata_B.index_map["freq"]["centre"][:],
                                            sub_frame_tau=sub_frame_tau,
                                            complex_conjugate_convention=complex_conjugate_convention,
                                            intra_channel_sign=intra_channel_sign,
                                            sample_rate=sample_rate)
-    end = time.time()
-    print(f"Running frac_samp_shift_vectorized: {end-start}")
     return aligned_a, aligned_b
 
-# @nb.jit()
-#### NEEDS TO BE SPED UP
+#### faster option is with gpus
 def frac_samp_shift_vectorized(data, f0, sub_frame_tau, complex_conjugate_convention, intra_channel_sign, sample_rate=2.56):
     """Fractional sample correction: coherently shifts data within a channel.
 
