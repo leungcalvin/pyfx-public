@@ -113,6 +113,7 @@ def crosscorr_core(bbdata_A, bbdata_B, T_A, Window, R, calc_results,DM,index_A=0
     vis_shape = (n_freq, n_pointings, n_pol, n_pol,  2 * max_lag + 1,n_scan)
     cross = np.zeros(vis_shape, dtype=bbdata_A['tiedbeam_baseband'].dtype)
     for iifreq in range(n_freq):  
+        print(iifreq)
         f0 = bbdata_B.index_map["freq"]["centre"][iifreq] 
         f0_a = bbdata_B.index_map["freq"]["centre"][iifreq] 
         print(iifreq)
@@ -163,7 +164,7 @@ def crosscorr_core(bbdata_A, bbdata_B, T_A, Window, R, calc_results,DM,index_A=0
                             scan_b_fs_cd[pol_1, start:stop])                            
                         cross[iifreq, iipointing, pol_0, pol_1, :max_lag+1, jjscan] = _vis[:max_lag+1]
                         cross[iifreq, iipointing, pol_0, pol_1, -max_lag:, jjscan] = _vis[-max_lag:]
-        return cross
+    return cross
 
 
 def intrachannel_dedisp(data, DM,f0,sample_rate=2.56):

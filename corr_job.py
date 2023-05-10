@@ -45,6 +45,9 @@ from difxcalc_wrapper import io, runner, telescopes
 from difxcalc_wrapper.config import DIFXCALC_CMD
 from scipy.fft import fft, ifft, next_fast_len
 
+from decimal import Decimal
+from astropy.time import Time,TimeDelta
+
 from core_correlation import autocorr_core, crosscorr_core
 from misc import station_from_bbdata, get_all_time0, get_all_im_freq, CALCFILE_DIR
 
@@ -58,7 +61,7 @@ def same_pointing(bbdata_a,bbdata_b):
     assert np.isclose(bbdata_a['tiedbeam_locations']['dec'][:],bbdata_b['tiedbeam_locations']['dec'][:]).all()
     return True
 
-def _ti0_even_spacing(bbdata_filename, ti0,  period_frames, num_scans_before = 'max', num_scans_after = 'max',time_ordered = False):
+def _ti0_even_spacing(bbdata_filename, ti0,  period_frames, num_scans_before = 0, num_scans_after = 'max',time_ordered = False):
     """
     ti0 : np.array of float64s
         Containing start times at station A, good to 2.56 us.
@@ -69,12 +72,12 @@ def _ti0_even_spacing(bbdata_filename, ti0,  period_frames, num_scans_before = '
     time0 = get_all_time0(bbdata_filename)
     im_freq = get_all_im_freq(bbdata_filename)
     if num_scans_before == 'max': # attempt to use the whole dump
-        start_time = extrapolate_to_full_band(time0['ctime'],im_freq['id'])
+        start_time = extrapolate_to_full_band(time0,im_freq['id'])['ctime']
         num_scans_per_freq = (ti0 - start_time) // (2.56e-6 * period_frames)
         num_scans_before = np.max(num_scans_per_freq)
 
     if num_scans_after == 'max': # attempt to use the whole dump
-        end_time = extrapolate_to_full_band(time0['ctime'] + 2.56e-6 * bbdata.ntime,im_freq['id'])
+        end_time = start_time + 2.56e-6 * bbdata.ntime
         num_scans_per_freq = (end_time - ti0) // (2.56e-6 * period_frames)
         num_scans_after = np.max(num_scans_per_freq) - 1 # minus one, since "num_scans_after" does not include the scan starting at ti0.
     scan_numbers = np.hstack((np.arange(0,num_scans_after),
@@ -87,7 +90,7 @@ def _ti0_even_spacing(bbdata_filename, ti0,  period_frames, num_scans_before = '
     tij = ti0[:, None] + scan_numbers[None, :] * 2.56e-6 * period_frames[:, None]
     return round_to_integer_frame(tij, bbdata_filename)
 
-def _ti0_from_t00_bbdata(bbdata_filename, t_00,f0,frame_offset = 0):
+def _ti0_from_t00_bbdata(bbdata_filename, t_00,f0):
     """Returns ti0 such that it aligns with the start frame of each channel in the bbdata (potentially with a constant frame_offset > 0 for all channels).
 
     This always returns 1024 start times, since different baselines might have different amounts of frequency coverage.
@@ -106,10 +109,11 @@ def _ti0_from_t00_bbdata(bbdata_filename, t_00,f0,frame_offset = 0):
     im_freq= get_all_im_freq(bbdata_filename)
     t0 = get_all_time0(bbdata_filename)
     iifreq = np.argmin(np.abs(im_freq["centre"][:] - f0))
-    sparse_ti0 = t0['ctime'][:] + (t_00 - t0['ctime'][iifreq]) # ti0 if these were all the frequencies we cared about. easy!
+    sparse_ti0 = t0.copy()
+    sparse_ti0['ctime'][:] = t0['ctime'][:] + (t_00 - t0['ctime'][iifreq]) # ti0 if these were all the frequencies we cared about. easy!
 
     #...but, we always need all 1024 frequencies! need to interpolate reasonably.
-    ti0 = extrapolate_to_full_band(sparse_ti0, im_freq['id'][:])
+    ti0 = extrapolate_to_full_band(sparse_ti0, im_freq['id'][:])['ctime']
     return ti0
 
 def _ti0_from_t00_dm(t00, f0, dm, fi):
@@ -176,23 +180,98 @@ def round_to_integer_frame(timestamps: np.ndarray, bbdata_filename):
         timestamps.shape = (1024,1)
     freq_id_present = get_all_im_freq(bbdata_filename)['id']
     time0_present = get_all_time0(bbdata_filename)
-    time0_ctime_full = extrapolate_to_full_band(time0_present["ctime"], freq_id_present)
+    time0_ctime_full = extrapolate_to_full_band(time0_present, freq_id_present)['ctime'][:]
     time0_ctime_full.shape = (1024,1)
     int_offset_full = np.rint((timestamps - time0_ctime_full) / 2.56e-6)
     """This gives absolute timestamps good to ~40 nanoseconds, limited by float64."""
     timestamps_rounded = time0_ctime_full + int_offset_full * 2.56e-6
     return timestamps_rounded.squeeze()
 
-def extrapolate_to_full_band(time, freq_ids):
-    """Nearest neighbor extrapolation over frequency_id axis"""
-    interpolant = interp1d(
+def fpga_start_time(
+    time0, start_time_error=True, integer_error=False, astropy_time=True
+):
+    """Returns the FPGA start time, inferred from every channel of baseband data present, as a list of Decimal objects"""
+    dump_time = Time(
+        time0["ctime"][:],
+        val2=time0["ctime_offset"][:],
+        format="unix",
+        precision=9,
+    )
+    fpga_start = dump_time - TimeDelta(2.56e-6 * un.s * time0["fpga_count"][:])
+    fpga_start_unix = fpga_start.to_value("unix", subfmt="decimal")
+    if (
+        np.mod(np.median(fpga_start_unix), 1) >= 1e-9
+    ):  # CHIME FPGAs start on an integer number of seconds , but not all F engines do
+        if integer_error:
+            ValueError("FPGAs do not start on an integer second")
+        else:
+            UserWarning("FPGAs do not start on an integer second")
+
+    if (
+        np.max(fpga_start_unix) - np.min(fpga_start_unix) > 1e-9
+    ):  # should be within one FPGA cycle
+        if start_time_error:
+            ValueError("Frequency channel timestamps differ by more than 1 nanosecond!")
+        else:
+            UserWarning(
+                "Frequency channel timestamps differ by more than 1 nanosecond!"
+            )
+    if astropy_time:
+        return fpga_start
+    else:
+        return fpga_start_unix
+
+def extrapolate_to_full_band(time0 : np.ndarray, freq_ids : np.ndarray):
+    """Interpolates time0 to the full bandwidth to float64 precision, which is sufficient for specifying start times.
+
+        Does this by:
+        1) calculating the fpga_start_time with high precision, 
+        2) doing nearest-neighbor interp on fpga_start_time, 
+        3) then doing high-precision calculation of ctime and ctime_offset
+        4) interpolating at the frequencies we do not have.
+
+        This does something very similar to baseband_analysis.fill_waterfall()!
+
+    """
+    new_t0 = np.zeros((1024,), dtype = time0.dtype)
+    new_fpga_start_time_unix = interp1d(
         x=freq_ids,
-        y=time, 
+        y=fpga_start_time(time0, start_time_error = True, astropy_time = False).astype(float),
         kind="nearest",
-        fill_value=(time[0], time[-1]),
+        fill_value=(time0['fpga_count'][0],time0['fpga_count'][-1]),
         bounds_error=False,
     )  # Nearest neighbor interpolation for fpga_start_time. This should not really matter.
-    return interpolant(np.arange(1024))
+    missing = np.setdiff1d(np.arange(1024), freq_ids)
+
+    # calculate new values for ctime and ctime_offset
+    new_t0["fpga_count"] = np.round(
+        np.interp(
+            xp=freq_ids,
+            fp=time0["fpga_count"],
+            x=np.arange(1024),
+            left=time0["fpga_count"][0],
+            right=time0["fpga_count"][-1],
+            )
+        )  # FPGA count is always an integer!
+    for freq_id, fpga_count, ftime in zip(
+        np.arange(1024),
+        new_t0["fpga_count"],
+        new_fpga_start_time_unix(np.arange(1024)),
+    ):
+        if freq_id in missing:
+            ct_decimal = Decimal(ftime) + fpga_count * Decimal(2.56e-6)
+            # ...but store `ctime` and `ctime_offset` as floats
+            new_t0["ctime"][freq_id] = ct_decimal
+            new_t0["ctime_offset"][freq_id] = ct_decimal - Decimal(
+                new_t0["ctime"][freq_id]
+            )
+            # calculate time0 and time0 offset
+
+    # ...but keep original values where possible
+    new_t0['ctime'][freq_ids] = time0['ctime']
+    new_t0['ctime_offset'][freq_ids] = time0['ctime_offset']
+    new_t0['fpga_count'][freq_ids] = time0['fpga_count']
+    return new_t0
 
 class CorrJob:
     def __init__(self, bbdata_filepaths, ras = None, decs = None):
@@ -344,7 +423,7 @@ class CorrJob:
 
         # First do t_i0 for the reference station...
         if freq_offset_mode == "bbdata":
-            _ti0 = _ti0_from_t00_bbdata(bbdata_ref_filename, t_00 = t00, f0 = f0, frame_offset = 0)
+            _ti0 = _ti0_from_t00_bbdata(bbdata_ref_filename, t_00 = t00, f0 = f0) 
         if freq_offset_mode == "dm":
             _ti0 = _ti0_from_t00_dm(t00, f0, dm = dm, fi = FREQ)
 
@@ -424,6 +503,9 @@ class CorrJob:
             A dispersion measure for de-smearing. Fractional precision needs to be 10%.
         """
         output = VLBIVis()
+        pointing_centers = np.zeros((len(self.pointings),),dtype = output._dataset_dtypes['pointing'])
+        pointing_centers['ra'] = self.ras
+        pointing_centers['dec'] = self.decs
         for iia in range(len(self.tel_names)):
             bbdata_a = BBData.from_file(self.bbdata_filepaths[iia])
             fill_waterfall(bbdata_a, write = True)
@@ -463,8 +545,9 @@ class CorrJob:
                         complex_conjugate_convention = -1, 
                         intra_channel_sign = 1
                     )
-                output._from_ndarray_baseline(vis,
+                output._from_ndarray_baseline(
                         event_id = event_id,
+                        pointing_center = pointing_centers,
                         telescope_a = self.telescopes[iia],
                         telescope_b = self.telescopes[iib],
                         cross = vis,
