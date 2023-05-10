@@ -5,8 +5,8 @@ import astropy.units as un
 import time
 
 from pyfx.core_math import fft_corr
-#from pyfx.core_math_c import fft_corr
 from pyfx.core_math import max_lag_slice
+import collections
 
 #enable type hints for static tools
 from baseband_analysis.core.bbdata import BBData
@@ -16,31 +16,28 @@ from typing import Optional, Tuple, Union
 K_DM = 1 / 2.41e-4  # in s MHz^2 / (pc cm^-3)
 
 def autocorr_core_vectorized(
-    DM: float,
     bbdata_a: BBData,
     t_a: np.ndarray,
     window: Union[np.ndarray, int],
     R: Union[np.ndarray, float],
     max_lag: int,
     n_pol: int=2):
-    ## assumes window is constant and R varies vs time
-    ## this is not yet properly vectorized for variable t_a
     """Correlates and downselects over lag (potentially more lags at shorter integration times
-    DM - the DM with which we de-smear the data before the final gating. for steady sources, set dispersion measure to 0.
-    bbdata_a - baseband data
-    t_a[i,j] - start times at ith frequency, for jth time chunk, for telescope A
-    window[j] - integer or np.array of size (nscan) holding length of time chunk window (us)
-    R[i,j] - integer or np.array of size (nfreq,nscan). Fraction of time chunk (defines pulse window). Variable name should be more descriptive
-    max_lag - maximum (absolute value) lag (in frames) for auto-correlation (useful for very long time series data)
+    DM - the DM with which we de-smear the data before the final gating. for continuum sources, set dispersion measure to 0.
+    bbdata_a - baseband data. Needs to have the property .fr
+    t_a[i,j] - start times at ith frequency, for jth time chunk, for telescope A. Upper layer should ensure that this is of size (nfreq,nscan). 
+    window[j] - integer or np.array of size (nscan) holding length of time chunk window in frames. Upper layer should assert that this is of size (nscan).
+    R[i,j] - float or np.array of size (nfreq,nscan). Fraction of time chunk (defines pulse window). Upper layer should ensure that this is less than 1, and that this is of size nxm.
+    max_lag - maximum (absolute value) lag (in frames) for auto-correlation (useful for very long time series data). Outer layer of the code should check that this is less than 1/2 of the window size times R[i,j]. 
     n_pol - number of polarizations in data
+    
     """
     n_freq = len(bbdata_a.freq)
     n_scan = np.size(t_a, axis=-1)
-    # SA: basing this off of how the data is arranged now, may want to change
-    n_pointings = bbdata_a["tiedbeam_baseband"].shape[1] // 2
+    # SA: basing this off of how bbdata is arranged now; user should be notified of how data is arranged in axes in readme
+    n_pointings = bbdata_a["tiedbeam_baseband"].shape[1] // n_pol
 
     vis_shape = (n_freq, n_pointings, n_pol, n_pol, n_scan, 2 * max_lag + 1)
-    # autocorr = np.zeros((n_freq, n_pol, n_pol, n_lag, n_time))
     auto_vis = np.zeros(vis_shape, dtype=bbdata_a['tiedbeam_baseband'].dtype)
 
     for pointing in range(n_pointings):
@@ -52,22 +49,23 @@ def autocorr_core_vectorized(
                     else:
                         window_jjscan=window[jjscan]
 
-                    t_a_indices = t_a[:, jjscan]  # array of length 1024
+                    t_a_indices = t_a[:, jjscan]  # array of length nfreq
 
-                    if type(R)==int: #should be 1 for steady sources
+                    if isinstance(R,collections.abc.Sized)==False:#should be 1 for continuum sources                    
                         r_jjscan=R
                     elif len(np.unique(R[:,jjscan]))==1:
                         r_jjscan=R[0,jjscan]
 
                     else: # "on" window varies as a function of frequency (e.g. pulsar)
                         r_jjscan=R[:,jjscan] #np array of size (nfreq)
-                        if len(np.unique(r_jjscan))==1:
-                            r_jjscan=r_jjscan[0]
 
-                    if (type(r_jjscan)==float or type(r_jjscan)==int) and len(np.unique(t_a_indices))==1:
+                    if isinstance(r_jjscan,collections.abc.Sized)==False and len(np.unique(t_a_indices))==1:
+                        # the simplest case, e.g. continuum source, we save time by completely vectorizing over frequency
                         r_ij=r_jjscan
                         start = int((window_jjscan - window_jjscan*r_ij) // 2)+t_a_indices[0]
                         stop = int((window_jjscan + window_jjscan*r_ij) // 2)+t_a_indices[0]
+                        print(start)
+                        print(stop)
 
                         _vis = fft_corr(
                             bbdata_a['tiedbeam_baseband'][
@@ -82,10 +80,12 @@ def autocorr_core_vectorized(
                             ])
                         auto_vis[:, pointing, iipol, jjpol, jjscan, :] = np.concatenate((_vis[:,:max_lag+1], _vis[:,-max_lag:]),axis=-1)
                     else:
+                        # if the start and stop times are not the same as a function of frequency, there is no easy way of vectorizing this. Resort to a for loop and pray that numba supports ffts someday. 
+                        if isinstance(r_jjscan,collections.abc.Sized)==False:
+                            r_jjscan=np.full(n_freq,r_jjscan)
                         for iifreq,r_ij in enumerate(r_jjscan):
                             start = int((window_jjscan - window_jjscan*r_ij) // 2)+t_a_indices[iifreq]
                             stop = int((window_jjscan + window_jjscan*r_ij) // 2)+t_a_indices[iifreq]
-
                             _vis = fft_corr(
                                 bbdata_a['tiedbeam_baseband'][
                                     iifreq,
@@ -122,11 +122,11 @@ def crosscorr_core_vectorized(
     inputs:
     bbdata_a - telescope A baseband data 
     bbdata_b - telescope B baseband data. Data must be "weel-ordered" in frequency (iifreqA=iifreqB). Frequency centers must also be in Mhz. 
-    t_a[i,j] - array of integers corresponding to start frames at ith frequency, for jth time chunk, for telescope A
+    t_a[i,j] - array of integers corresponding to start frames at ith frequency, for jth time chunk, for telescope A. Upper layer should ensure that this is of size nxm. 
     window - np.array of size (nscans) containing integer numbers, each element is the length of scan window in frames
-    R[i,j] - fraction of time chunk (defines pulse window). For steady sources, R=1 ("on" window = full window)
+    R[i,j] - fraction of time chunk (defines pulse window). For continuum sources, R=1 ("on" window = full window).Upper layer should ensure that this is less than 1.
     calc_results - difxcalc-wrapper IMReader object, which is used to calculate geometric delays
-    DM - the DM with which we de-smear the data before the final gating. for steady sources, set dispersion measure to 0.
+    DM - the DM with which we de-smear the data before the final gating. for continuum sources, set dispersion measure to 0.
     index_A - where telescope A corresponds to in calc_results: CL: ideally, you should figure out the telescope index from the BBData object.
     index_B - where telescope B corresponds to in calc_results: CL: ideally, you should figure out the telescope index from the BBData object.
     max_lag - maximum (absolute value) lag (in frames) for correlations (useful for very long time series data)
@@ -141,12 +141,12 @@ def crosscorr_core_vectorized(
     n_freq = len(bbdata_a.freq)
     n_scan = np.size(t_a, axis=-1)
     # SA: basing this off of how the data is arranged now, may want to change
-    n_pointings = bbdata_a["tiedbeam_baseband"].shape[1] // 2
+    n_pointings = bbdata_a["tiedbeam_baseband"].shape[1] // n_pol
 
     vis_shape = (n_freq, n_pointings, n_pol, n_pol, n_scan, 2 * max_lag + 1)
     cross = np.zeros(vis_shape, dtype=bbdata_a['tiedbeam_baseband'].dtype)
 
-    for pointing in range(n_pointings):
+    for npointing in range(n_pointings):
         f0 = bbdata_b.index_map["freq"]["centre"] #shape is (nfreq)
         for jjscan in range(n_scan):
             if type(window)==int:
@@ -183,7 +183,8 @@ def crosscorr_core_vectorized(
             # Fringestopping B -> A
             scan_a, scan_b_fs = get_aligned_scans_vectorized(
                 bbdata_a, bbdata_b, t_a_indices, window_jjscan, geodelays,
-                complex_conjugate_convention=complex_conjugate_convention, intra_channel_sign=intra_channel_sign, sample_rate=sample_rate
+                complex_conjugate_convention=complex_conjugate_convention, intra_channel_sign=intra_channel_sign, sample_rate=sample_rate,
+                npointing=npointing,npol=npol
             )
 
             #######################################################
@@ -198,7 +199,7 @@ def crosscorr_core_vectorized(
             #######################################################
             # Now that the pulses are centered at zero, calculate
             ### the start and stop time indices for on-signal ######
-            if type(R)==int: #should be 1 for steady sources
+            if type(R)==int: #should be 1 for continuum sources
                 r_jjscan=R
 
             else: # "on" window varies as a function of frequency (e.g. pulsar)
@@ -236,7 +237,17 @@ def crosscorr_core_vectorized(
 
     return cross
 
-def get_aligned_scans_vectorized(bbdata_a, bbdata_b, t_a_index, wij, tau, complex_conjugate_convention=-1, intra_channel_sign=1, sample_rate=2.56):
+def get_aligned_scans_vectorized(
+        bbdata_a, 
+        bbdata_b, 
+        t_a_index, 
+        wij, 
+        tau, 
+        complex_conjugate_convention: int=-1, 
+        intra_channel_sign: int=1, 
+        sample_rate: float =2.56,
+        npointing:int=0,
+        n_pol:int=2):
     """For a single frequency corresponding to a given FPGA freq_id, returns aligned scans of data for that freq_id out of two provided BBData objects.
 
     bbdata_a : BBData
@@ -276,23 +287,23 @@ def get_aligned_scans_vectorized(bbdata_a, bbdata_b, t_a_index, wij, tau, comple
     """
 
     time_we_want_at_b = tau[:, 0]  # us
-    a_shape = list(bbdata_a['tiedbeam_baseband'].shape)
+    a_shape = list(bbdata_a['tiedbeam_baseband'][:,npointing:npointing+n_pol,:].shape)
     a_shape[-1] = wij
 
     aligned_a = np.zeros(a_shape, dtype=bbdata_a['tiedbeam_baseband'].dtype)
     # TODO vectorize
     if len(np.unique(t_a_index))==1:
-        aligned_a[:, ...] = bbdata_a['tiedbeam_baseband'][:, ...,
+        aligned_a[:, ...] = bbdata_a['tiedbeam_baseband'][:,npointing:npointing+n_pol,
                                                           t_a_index[0]:t_a_index[0] + wij]
     else:
         for i in range(len(t_a_index)):
-            aligned_a[i, ...] = bbdata_a['tiedbeam_baseband'][i, ...,
+            aligned_a[i, ...] = bbdata_a['tiedbeam_baseband'][i,npointing:npointing+n_pol,
                                                             t_a_index[i]:t_a_index[i] + wij]
 
     # aligned_a = bbdata_a['tiedbeam_baseband'][freq_id,...,t_a_index:t_a_index + wij]
     # initialize aligned B array
     aligned_b = np.zeros(
-        bbdata_b['tiedbeam_baseband'].shape, dtype=bbdata_b['tiedbeam_baseband'].dtype)
+        bbdata_b['tiedbeam_baseband'][:,npointing:npointing+n_pol,:].shape, dtype=bbdata_b['tiedbeam_baseband'].dtype)
     # calculate the additional offset between A and B in the event that the (samples points of) A and B are misaligned in absolute time by < 1 frame
     # i.e. to correctly fringestop, we must also account for a case such as:
     ## A:    |----|----|----|----|----| ##
@@ -336,7 +347,7 @@ def get_aligned_scans_vectorized(bbdata_a, bbdata_b, t_a_index, wij, tau, comple
     for i in range(len(pad_index_b)):
         aligned_b[i, ..., pad_index_b[i]:pad_index_b[i]+new_wij[i]] = \
             bbdata_b['tiedbeam_baseband'][i, ...,start_index_we_have_at_b[i]:start_index_we_have_at_b[i]+new_wij[i]] * correction_factor[i]
-    # multiply by the correction factor to ensure that a steady source, when correlated, has the correct flux corresponding to the desired w_ij, even when we run out of data.
+    # multiply by the correction factor to ensure that a continuum source, when correlated, has the correct flux corresponding to the desired w_ij, even when we run out of data.
     aligned_b = aligned_b[..., :wij]
 
     time_we_have_at_b = (delta_A_B+int_delay*sample_rate*1e-6)  # s
@@ -352,7 +363,7 @@ def get_aligned_scans_vectorized(bbdata_a, bbdata_b, t_a_index, wij, tau, comple
     return aligned_a, aligned_b
 
 #### faster option is with gpus
-def frac_samp_shift_vectorized(data, f0, sub_frame_tau, complex_conjugate_convention, intra_channel_sign, sample_rate=2.56):
+def frac_samp_shift_vectorized(data, f0, sub_frame_tau, complex_conjugate_convention=-1, intra_channel_sign=1, sample_rate=2.56):
     """Fractional sample correction: coherently shifts data within a channel.
 
     data : np.ndarray of shape (ntime)
@@ -386,20 +397,13 @@ def intrachannel_dedisp_vectorized(
     DM: float,
     f0: np.ndarray,
     sample_rate: float = 2.56):
-    #### NOT YET TESTED
     """Intrachannel dedispersion: brings data to center of channel.
-
     This is Eq. 5.17 of Lorimer and Kramer 2004 textbook, but ONLY the last term (proportional to f^2), not the other two terms (independent of f and linearly proportional to f respectively).
-
     data : np.ndarray of shape (nfreq,...,ntime)
-
     f0 : np.ndarray of shape (nfreq) holding channel centers.
-
-    sample_rate : sampling rate of data in microseconds
-
-    TODO: use numba or GPU for this!"""
+    sample_rate : sampling rate of data in microseconds"""
     n = data.shape[-1]
     f = np.fft.fftfreq(n) * sample_rate
-    transfer_func = np.exp(-2j * np.pi * K_DM * DM * f**2 / f0**2 / (f + f0))  # double check this minus sign -- might be a + instead in CHIME data.
-    data = np.fft.ifft(np.fft.fft(data, axis=-1) * transfer_func,axis=-1)
+    transfer_func = np.exp(-2j * np.pi * K_DM * DM * f[np.newaxis,:]**2 / f0[:,np.newaxis]**2 / (f[np.newaxis,:] + f0[:,np.newaxis]))  
+    data = np.fft.ifft(np.fft.fft(data, axis=-1) * transfer_func[:,np.newaxis,:],axis=-1)
     return data
