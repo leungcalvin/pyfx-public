@@ -22,7 +22,9 @@ def autocorr_core_vectorized(
     R: Union[np.ndarray, float],
     max_lag: int,
     n_pol: int=2):
-    """Correlates and downselects over lag (potentially more lags at shorter integration times
+    """Auto-correlates data and downselects over lag
+    Inputs:
+    -------
     DM - the DM with which we de-smear the data before the final gating. for continuum sources, set dispersion measure to 0.
     bbdata_a - baseband data. Needs to have the property .fr
     t_a[i,j] - start times at ith frequency, for jth time chunk, for telescope A. Upper layer should ensure that this is of size (nfreq,nscan). 
@@ -30,7 +32,10 @@ def autocorr_core_vectorized(
     R[i,j] - float or np.array of size (nfreq,nscan). Fraction of time chunk (defines pulse window). Upper layer should ensure that this is less than 1, and that this is of size nxm.
     max_lag - maximum (absolute value) lag (in frames) for auto-correlation (useful for very long time series data). Outer layer of the code should check that this is less than 1/2 of the window size times R[i,j]. 
     n_pol - number of polarizations in data
-    
+    Outputs:
+    -------
+    auto_vis - array of autocorrelations with shape (nfreq, npointing, npol, npol, nscan,nlag)
+
     """
     n_freq = len(bbdata_a.freq)
     n_scan = np.size(t_a, axis=-1)
@@ -118,8 +123,9 @@ def crosscorr_core_vectorized(
     intra_channel_sign: int=1,
     fast: bool=True
 ):
-    """
-    inputs:
+    """Fringestops, coherently dedisperses, and cross correlates data 
+    Inputs:
+    -------
     bbdata_a - telescope A baseband data 
     bbdata_b - telescope B baseband data. Data must be "weel-ordered" in frequency (iifreqA=iifreqB). Frequency centers must also be in Mhz. 
     t_a[i,j] - array of integers corresponding to start frames at ith frequency, for jth time chunk, for telescope A. Upper layer should ensure that this is of size nxm. 
@@ -134,9 +140,10 @@ def crosscorr_core_vectorized(
     n_pol - number of polarizations 
     complex conjugate convention - should be a value of -1 if the baseband data is complex conjugated with respect to the sky, 1 otherwise
     intra_channel_sign - a sign to account for a reflection of frequencies about zero (e.g. in iq/baseband data). Should be -1 if frequencies within a channel are reflected about 0, 1 otherwise. 
+    
     Outputs:
-    cross - array of autocorrelations and cross correlations with shape (pointing,freq, timechunk, pol, pol, delay)
-
+    -------
+    cross - array of cross correlations with shape (nfreq, npointing, npol, npol, nscan,nlag)
     """
     n_freq = len(bbdata_a.freq)
     n_scan = np.size(t_a, axis=-1)
@@ -168,7 +175,7 @@ def crosscorr_core_vectorized(
             if fast==True:
                 dt_vals=(sample_rate * 1e-6 * (t_a_indices[:, np.newaxis] + 1 + np.arange(window_jjscan)))
                 geodelays_flattened = calc_results.retarded_baseline_delay(
-                    ant1=index_A, ant2=index_B, time=start_times, src=pointing, delay_sign=0, self_consistent=False,
+                    ant1=index_A, ant2=index_B, time=start_times, src=npointing, delay_sign=0, self_consistent=False,
                     frame_dt=dt_vals
                 )
                 geodelays = geodelays_flattened.reshape(dt_vals.shape)
@@ -177,14 +184,14 @@ def crosscorr_core_vectorized(
                 for i in range(n_freq):
                     query_times = start_times[i] + sample_rate*1e-6 * un.s * (t_a_indices[i]+np.arange(window_jjscan))
                     geodelays[i,:]=calc_results.retarded_baseline_delay(
-                        ant1=index_A, ant2=index_B, time=query_times, src=pointing,delay_sign=0,self_consistent=False
+                        ant1=index_A, ant2=index_B, time=query_times, src=npointing,delay_sign=0,self_consistent=False
                     )
 
             # Fringestopping B -> A
             scan_a, scan_b_fs = get_aligned_scans_vectorized(
                 bbdata_a, bbdata_b, t_a_indices, window_jjscan, geodelays,
                 complex_conjugate_convention=complex_conjugate_convention, intra_channel_sign=intra_channel_sign, sample_rate=sample_rate,
-                npointing=npointing,npol=npol
+                npointing=npointing,npol=n_pol
             )
 
             #######################################################
@@ -218,7 +225,7 @@ def crosscorr_core_vectorized(
                         _vis = fft_corr(
                             scan_a_cd[:, pol_0, start:stop],
                             scan_b_fs_cd[:, pol_1, start:stop])
-                        cross[:, pointing, pol_0, pol_1, jjscan, :] = np.concatenate(
+                        cross[:, npointing, pol_0, pol_1, jjscan, :] = np.concatenate(
                             (_vis[:,:max_lag+1], _vis[:,-max_lag:]),axis=-1)
             else:
                 for r_ij in r_jjscan:
@@ -232,24 +239,25 @@ def crosscorr_core_vectorized(
                                 _vis = fft_corr(
                                     scan_a_cd[:, pol_0, start:stop],
                                     scan_b_fs_cd[:, pol_1, start:stop])
-                                cross[:, pointing, pol_0, pol_1, jjscan, :] = np.concatenate(
+                                cross[:, npointing, pol_0, pol_1, jjscan, :] = np.concatenate(
                                     (_vis[:,:max_lag+1], _vis[:,-max_lag:]),axis=-1)
 
     return cross
 
 def get_aligned_scans_vectorized(
-        bbdata_a, 
-        bbdata_b, 
-        t_a_index, 
-        wij, 
-        tau, 
-        complex_conjugate_convention: int=-1, 
-        intra_channel_sign: int=1, 
-        sample_rate: float =2.56,
-        npointing:int=0,
-        n_pol:int=2):
+    bbdata_a: BBData, 
+    bbdata_b: BBData, 
+    t_a_index: np.ndarray, 
+    wij: int, 
+    tau: np.ndarray, 
+    complex_conjugate_convention: int=-1, 
+    intra_channel_sign: int=1, 
+    sample_rate: float =2.56,
+    npointing:int=0,
+    n_pol:int=2):
     """For a single frequency corresponding to a given FPGA freq_id, returns aligned scans of data for that freq_id out of two provided BBData objects.
-
+    Inputs:
+    -------
     bbdata_a : BBData
         A BBData object, with arbitrary frequency coverage.
 
@@ -259,7 +267,8 @@ def get_aligned_scans_vectorized(
     t_a_index : np.array of shape (1024)
         An array of indices corresponding to the start frames for telescope A
 
-    w_ij : window length. Should be an integer, and brownie points for a good FFT length.
+    w_ij : int
+        window length. Should be an integer, and brownie points for a good FFT length.
 
     tau : np.array (nfreq, n_frame) of dtype np.float
         A delay in microseconds to apply to BBData_b, corresponding to the geometric delay.
@@ -267,16 +276,13 @@ def get_aligned_scans_vectorized(
 
     freq_index : int
 
-    Returns
+    Outputs:
     -------
     aligned_a : np.array
         A dual-pol scan of shape (2,w_ij)
 
     aligned_b : np.array
         A dual-pol scan of shape (2,w_ij)
-
-    newstart: int
-        Number of frames by which we need to shift t_a_ij in order to ensure t_a_ij+geodelay is contained within bbdata_b. Note that in the event that geodelay is positive, newstart will always be 0 (assuming the user has chosen t_a_ij such that the unix time is in both datasets)
 
     Super technical note on floor vs round: it doesn't matter AS LONG AS you do a sub-sample rotation (or better yet, a frac samp correction)! Suppose your total delay is 10.6 frames.
     - You can round to 11 frames. You should keep track that you rounded to 11, and then do frac samp -0.4.
@@ -363,8 +369,14 @@ def get_aligned_scans_vectorized(
     return aligned_a, aligned_b
 
 #### faster option is with gpus
-def frac_samp_shift_vectorized(data, f0, sub_frame_tau, complex_conjugate_convention=-1, intra_channel_sign=1, sample_rate=2.56):
-    """Fractional sample correction: coherently shifts data within a channel.
+def frac_samp_shift_vectorized(
+    data:np.ndarray, 
+    f0:np.ndarray, 
+    sub_frame_tau:np.ndarray, 
+    complex_conjugate_convention:int=-1, 
+    intra_channel_sign:int=1, 
+    sample_rate: float=2.56):
+    """Fractional sample correction: coherently shifts data within a channel via a fractional phase shift of the form exp(2j*pi*f*sub_frame_tau).
 
     data : np.ndarray of shape (ntime)
 
@@ -378,9 +390,7 @@ def frac_samp_shift_vectorized(data, f0, sub_frame_tau, complex_conjugate_conven
 
     intra_channel_sign: a sign to account for a reflection of frequencies about zero (e.g. in iq/baseband data)
 
-    Applies a fractional phase shift of the form exp(2j*pi*f*sub_frame_tau) to the data.
 
-    ## need to rethink looping over frequency in the main function; this should take in an array of freqs
     """
     # glorified element wise multiplication
     #data will be of shape (nfreq,npol,ntime)
