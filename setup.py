@@ -6,10 +6,9 @@ setup(
     version="0.1.0",
     author="Calvin Leung",
     author_email="calvinleung@mit.edu",
-    # packages=find_packages(),
     packages=['pyfx'],
     package_dir = {
-        'pyfx': ''
+        '':"src"
     },
     url="http://github.com/leungcalvin/pyfx",
     license="LICENSE.txt",
@@ -26,8 +25,4 @@ setup(
         "difxcalc-wrapper",
     ],
     python_requires=">=3.6",
-    ext_modules = cythonize(
-        'core_math_c.pyx',
-        compiler_directives={'language_level' : "3"}
-    )
 )
