@@ -44,6 +44,13 @@ def get_all_im_freq(bbdata_filename, method = 'single'):
     if method == 'multiple':
         raise NotImplementedError('Should probably grep the filepath for something like baseband_XXX_FREQID and read them in a loop')
 
+def choose_beam_idx_from_pointing(pointing_ra, pointing_dec, tiedbeam_ra, tiedbeam_dec,tolerance_deg = 2/60):
+    assert type(pointing_ra) is float, "One pointing a time!"
+    assert type(pointing_dec) is float, "One pointing at a time!"
+    pairwise_distances_deg = ((pointing_ra - tiedbeam_ra)**2 + (pointing_dec - tiedbeam_dec)**2 * np.cos(pointing_dec * np.pi / 180) **2 )**0.5
+    assert np.min(pairwise_distances_deg) < tolerance_deg, "No suitable beam found for correlator pointing."
+    return np.argmin(pairwise_distances_deg)
+
 def get_ntime(bbdata_filename):
     with h5py.File(bbdata_filename, mode = 'r') as f:
         return f['tiedbeam_baseband'].shape[-1]
