@@ -1,20 +1,33 @@
 """A module which holds bindings to mathematical operations. Here we only import numpy and scipy."""
 import numpy as np
 from scipy.fft import fft, ifft, next_fast_len,fftfreq
+import torch
+import torch.fft as torch_fft
+import time
 
-def fft_corr(w1, w2, axis=-1):
+# note - scipy.fft is faster than numba.fft
+def fft_corr_gpu(w1: torch.Tensor, w2: torch.Tensor, axis=-1):
     """Correlates but vectorizes over all axes except the correlation axis (-1 by default).
+    out : torch.Tensor
+        Correlation between w1 and w2: the output will have lag zero at index 0.
+        out[1:n//2] contains positive lags, out[n//2+1] contains negative lags"""
+    assert axis==-1, "fft in pytorch is only supported along last axis of data"
+    x=torch_fft.fft(w1)
+    del(w1)
+    y=torch.conj(torch_fft.fft(w2))
+    del w2
+    return torch_fft.ifft(x*y)  
 
+# S.E.A.: note - scipy.fft is faster than np.fft. 
+# Scipy.fft is already optimized to the point where that implementing this in cython won't really speed things up; you need gpus (see core_math_torch.py)
+def fft_corr(w1: np.ndarray, w2: np.ndarray, axis=-1):
+    """Correlates but vectorizes over all axes except the correlation axis (-1 by default).
     w1 : np.ndarray
-
     w2 : np.ndarray
-
     out : np.ndarray
         Correlation between w1 and w2: the output will have lag zero at index 0.
         out[1:n//2] contains positive lags, out[n//2+1] contains negative lags"""
-
     return ifft(fft(w1, axis=axis) * fft(w2, axis=axis).conj(), axis=axis)
-
 
 def max_lag_slice(array, max_lag, lag_axis=-1):
     """Downselects an array out to some maximum lag.
