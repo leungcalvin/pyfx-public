@@ -7,12 +7,13 @@ class VeryBasicBBData:
     def __init__(self,
         nfreq,
         data,
-        ctime,
-        ctime_offset):
+        #ctime,
+        #ctime_offset
+        ):
         self.freq=nfreq
         self.data = data
-        self.ctime = ctime
-        self.ctime_offset = ctime_offset
+        #self.ctime = ctime
+        #self.ctime_offset = ctime_offset
 
     def __getitem__(self, key):
         if key == "tiedbeam_baseband":
@@ -60,9 +61,9 @@ def test_autocorr_vectorized_1():
     R=np.random.uniform(.5,1,(nfreq,nscan))
     max_lag=10
     window=np.ones(nscan)*40
-    vectorized_autocorr=autocorr_core_vectorized(bbdata_a=bbdata_a, t_a=t_a,window=window,R=R,max_lag=max_lag)
+    vectorized_autocorr=autocorr_core_vectorized(bbdata_a=bbdata_a, t_a=t_a,window=window,R=R,max_lag=max_lag, DM = 0)
     window=np.ones((nfreq,nscan))*40
-    autocorr=autocorr_core(bbdata_A=bbdata_a, T_A=t_a,Window=window,R=R,max_lag=max_lag)
+    autocorr=autocorr_core(bbdata_A=bbdata_a, T_A=t_a,Window=window,R=R,max_lag=max_lag,DM = 0)
     np.testing.assert_array_equal(vectorized_autocorr,autocorr)
     for i in range(nscan):
         assert (np.imag(vectorized_autocorr[...,i,0,0,0,0])==0.0).all()==True
@@ -89,14 +90,8 @@ def test_autocorr():
     R=np.ones((nfreq,nscan))
     max_lag=10
     window=np.ones(nscan)*40
-    vectorized_autocorr=autocorr_core_vectorized(bbdata_a=bbdata_a, t_a=t_a,window=window,R=R,max_lag=max_lag)
+    vectorized_autocorr=autocorr_core_vectorized(DM = 0,bbdata_a=bbdata_a, t_a=t_a,window=window,R=R,max_lag=max_lag)
     window=np.ones((nfreq,nscan))*40
     for i in range(nscan):
         assert (vectorized_autocorr[...,i,0,0,0,0]==amplitude_00).all()==True
         assert (vectorized_autocorr[...,i,1,1,0,0]==amplitude_11).all()==True
-
-if __name__ == "__main__":
-    #test_dedispersion_vectorized()
-    #test_fracsampleshift_vectorized()
-    #test_autocorr_vectorized()
-    test_autocorr()

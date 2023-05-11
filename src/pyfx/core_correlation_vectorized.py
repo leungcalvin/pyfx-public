@@ -16,6 +16,7 @@ from typing import Optional, Tuple, Union
 K_DM = 1 / 2.41e-4  # in s MHz^2 / (pc cm^-3)
 
 def autocorr_core_vectorized(
+    DM: float, 
     bbdata_a: BBData,
     t_a: np.ndarray,
     window: Union[np.ndarray, int],
