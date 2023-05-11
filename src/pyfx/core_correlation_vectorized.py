@@ -28,11 +28,14 @@ def autocorr_core_vectorized(
     -------
     DM - the DM with which we de-smear the data before the final gating. for continuum sources, set dispersion measure to 0.
     bbdata_a - baseband data. Needs to have the property .fr
-    t_a[i,j] - start times at ith frequency, for jth time chunk, for telescope A. Upper layer should ensure that this is of size (nfreq,nscan). 
-    window[j] - integer or np.array of size (nscan) holding length of time chunk window in frames. Upper layer should assert that this is of size (nscan).
-    R[i,j] - float or np.array of size (nfreq,nscan). Fraction of time chunk (defines pulse window). Upper layer should ensure that this is less than 1, and that this is of size nxm.
-    max_lag - maximum (absolute value) lag (in frames) for auto-correlation (useful for very long time series data). Outer layer of the code should check that this is less than 1/2 of the window size times R[i,j]. 
-    n_pol - number of polarizations in data
+    t_a[i,j] - start times at ith frequency, for jth time chunk, for telescope A. Upper layer should ensure that this is of size (nfreq,npointing, nscan). 
+    window[j] - integer or np.array of size (nscan) holding length of time chunk window in frames. Upper layer should assert that this is of size (npointing,nscan).
+    R[i,j] - float or np.array of size (nfreq,npointing,nscan), i.e. the fraction of window over which we gate. 
+        CorrJob will ensure that this is less than 1, and that this is of size (nfreq, npointing, nscan).
+    max_lag - int
+        Maximum (absolute value) lag (in frames) for auto-correlation (useful for very long time series data). Outer layer of the code should check that this is less than 1/2 of the window size times R[i,j]. 
+    n_pol - int 
+        Number of polarizations in data: 2 always.
     Outputs:
     -------
     auto_vis - array of autocorrelations with shape (nfreq, npointing, npol, npol, nscan,nlag)
@@ -55,7 +58,7 @@ def autocorr_core_vectorized(
                     else:
                         window_jjscan=window[jjscan]
 
-                    t_a_indices = t_a[:, jjscan]  # array of length nfreq
+                    t_a_indices = t_a[:, pointing, jjscan]  # array of length nfreq
 
                     if isinstance(R,collections.abc.Sized)==False:#should be 1 for continuum sources                    
                         r_jjscan=R

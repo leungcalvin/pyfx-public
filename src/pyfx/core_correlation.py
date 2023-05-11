@@ -42,7 +42,6 @@ def autocorr_core(DM, bbdata_A, T_A, Window, R, max_lag=None,n_pol=2):
     n_beams =bbdata_A["tiedbeam_baseband"].shape[1] // 2
     
     R = np.atleast_2d(R)
-    assert R.shape[0] == 1024
     
     n_pointings=bbdata_A["tiedbeam_baseband"].shape[1] // 2 ## SA: basing this off of how the data is arranged now, may want to change
 
