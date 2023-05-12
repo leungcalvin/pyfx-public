@@ -42,7 +42,7 @@ from baseband_analysis.core import BBData
 from difxcalc_wrapper import io, runner, telescopes
 from difxcalc_wrapper.config import DIFXCALC_CMD
 from scipy.fft import fft, ifft, next_fast_len
-from misc import station_from_bbdata,CALCFILE_DIR
+from pyfx.misc import station_from_bbdata,CALCFILE_DIR
 
 K_DM = 1 / 2.41e-4  # in s MHz^2 / (pc cm^-3)
 FREQ = np.linspace(800,400,num = 1024, endpoint = False)
@@ -119,14 +119,6 @@ class CorrJob:
             difxcalc_cmd=DIFXCALC_CMD,
         )
         return 
-
-        #for ii_b in range(len(self.tel_names)):
-        #tau_00 = self.calcresults.baseline_delay(
-        #    ant1=self.tel_names.index(ref_station),
-        #    ant2=ii_b,
-        #    time=Time(unix_a, format="unix"),
-        #    src=src,  # should be a 1 time value x 1 pointing evaluation
-        #)
 
     def t0_f0_from_bbdata(t0f0,bbdata_ref):
         """ Returns the actual t00 and f0 from bbdata_ref.

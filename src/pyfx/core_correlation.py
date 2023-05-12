@@ -25,7 +25,7 @@ def autocorr_core(DM, bbdata_A, T_A, Window, R, max_lag=None,n_pol=2):
     max_lag - maximum (absolute value) lag (in frames) for auto-correlation (useful for very long time series data)
     n_pol - number of polarizations in data
     """
-    n_freq = len(bbdata_A.freq)
+    n_freq = bbdata_A.nfreq
     n_scan = np.size(T_A,axis=-1)
     n_pointings=bbdata_A["tiedbeam_baseband"].shape[1] // 2 ## SA: basing this off of how the data is arranged now, may want to change
 

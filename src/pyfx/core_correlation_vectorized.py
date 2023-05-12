@@ -38,7 +38,7 @@ def autocorr_core_vectorized(
     auto_vis - array of autocorrelations with shape (nfreq, npointing, npol, npol, nscan,nlag)
 
     """
-    n_freq = len(bbdata_a.freq)
+    n_freq = bbdata_a.nfreq
     n_scan = np.size(t_a, axis=-1)
     n_pointings = bbdata_a["tiedbeam_baseband"].shape[1] // n_pol
 
