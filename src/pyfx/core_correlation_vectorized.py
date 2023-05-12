@@ -30,7 +30,7 @@ def autocorr_core_vectorized(
     bbdata_a - baseband data. Needs to have "tiedbeam_baseband" data of size (nfreq,npointing*npol.ntime)
     t_a[i,j] - start times at ith frequency, for jth time chunk, for telescope A. Upper layer should ensure that this is of size (nfreq,nscan). 
     window[j] - integer or np.array of size (nscan) holding length of time chunk window in frames. Upper layer should assert that this is of size (nscan).
-    R[i,j] - float or np.array of size (nfreq,nscan). Fraction of time chunk (defines pulse window). Upper layer should ensure that this is less than 1, and that this is of size nxm.
+    R[i,j] - float or np.array of size (nfreq,nscan). zFraction of time chunk (defines pulse window). Upper layer should ensure that this is less than 1, and that this is of size nxm.
     max_lag - maximum (absolute value) lag (in frames) for auto-correlation (useful for very long time series data). Outer layer of the code should check that this is less than 1/2 of the window size times R[i,j]. 
     n_pol - number of polarizations in data
     Outputs:
@@ -44,69 +44,53 @@ def autocorr_core_vectorized(
 
     vis_shape = (n_freq, n_pointings, n_pol, n_pol, n_scan, 2 * max_lag + 1)
     auto_vis = np.zeros(vis_shape, dtype=bbdata_a['tiedbeam_baseband'].dtype)
+    f0 = bbdata_a.index_map["freq"]["centre"] #shape is (nfreq)
 
-    for pointing in range(n_pointings):
-        for iipol in range(n_pol):
-            for jjpol in range(n_pol):
-                for jjscan in range(n_scan):
-                    if type(window)==int:
-                        window_jjscan=window
-                    else:
-                        window_jjscan=window[jjscan]
+    
+    for jjscan in range(n_scan):
+        if type(window)==int:
+            window_jjscan=window
+        else:
+            window_jjscan=window[jjscan]
 
-                    t_a_indices = t_a[:, jjscan]  # array of length nfreq
+        t_a_indices = t_a[:, jjscan]  # array of length nfreq
 
-                    if isinstance(R,collections.abc.Sized)==False:#should be 1 for continuum sources                    
-                        r_jjscan=R
-                    elif len(np.unique(R[:,jjscan]))==1:
-                        r_jjscan=R[0,jjscan]
+        if isinstance(R,collections.abc.Sized)==False:#should be 1 for continuum sources                    
+            r_jjscan=R
+        elif len(np.unique(R[:,jjscan]))==1:
+            r_jjscan=R[0,jjscan]
 
-                    else: # "on" window varies as a function of frequency (e.g. pulsar)
-                        r_jjscan=R[:,jjscan] #np array of size (nfreq)
+        else: # "on" window varies as a function of frequency (e.g. pulsar)
+            r_jjscan=R[:,jjscan] #np array of size (nfreq)
 
-                    if isinstance(r_jjscan,collections.abc.Sized)==False and len(np.unique(t_a_indices))==1:
-                        # the simplest case, e.g. continuum source, we save time by completely vectorizing over frequency
+        if isinstance(r_jjscan,collections.abc.Sized)==False and len(np.unique(t_a_indices))==1:
+            # the simplest case, e.g. continuum source, we save time by completely vectorizing over frequency
+            for pointing in range(n_pointings):
+                for iipol in range(n_pol):
+                    for jjpol in range(n_pol):
                         r_ij=r_jjscan
                         start = int((window_jjscan - window_jjscan*r_ij) // 2)+t_a_indices[0]
                         stop = int((window_jjscan + window_jjscan*r_ij) // 2)+t_a_indices[0]
-
-                        scan_a_cd_iipol = intrachannel_dedisp_vectorized(bbdata_a['tiedbeam_baseband'][
-                                :,
-                                iipol,
-                                start: stop,
-                            ], DM, f0=f0)
-                    
-                        scan_a_cd_jjpol = intrachannel_dedisp_vectorized(bbdata_a['tiedbeam_baseband'][
-                                :,
-                                jjpol,
-                                start: stop,
-                            ], DM, f0=f0)
-
-                        _vis = fft_corr(scan_a_cd,scan_a_cd_jjpol)
+                        scan_a_cd = intrachannel_dedisp_vectorized(bbdata_a['tiedbeam_baseband'][:,:,start:stop], DM, f0=f0)
+                        _vis = fft_corr(scan_a_cd[:,iipol,:],scan_a_cd[:,jjpol,:])
                         auto_vis[:, pointing, iipol, jjpol, jjscan, :] = np.concatenate((_vis[:,:max_lag+1], _vis[:,-max_lag:]),axis=-1)
                     
-                    else:
-                        # if the start and stop times are not the same as a function of frequency, there is no easy way of vectorizing this. 
-                        # # Resort to a for loop and pray that numba supports ffts someday. 
+        else:
+            # if the start and stop times are not the same as a function of frequency, there is no easy way of vectorizing this. 
+            # We can be smarter about this based on the window size, but for now
+            # be lazy and resort to a for loop 
+        
+            ## note: this is very slow
+            scan_a_cd = intrachannel_dedisp_vectorized(bbdata_a['tiedbeam_baseband'][:,:,:,], DM, f0=f0)
+            for pointing in range(n_pointings):
+                for iipol in range(n_pol):
+                    for jjpol in range(n_pol):
                         if isinstance(r_jjscan,collections.abc.Sized)==False:
                             r_jjscan=np.full(n_freq,r_jjscan)
                         for iifreq,r_ij in enumerate(r_jjscan):
                             start = int((window_jjscan - window_jjscan*r_ij) // 2)+t_a_indices[iifreq]
                             stop = int((window_jjscan + window_jjscan*r_ij) // 2)+t_a_indices[iifreq]
-                            
-                            scan_a_cd_iipol = intrachannel_dedisp_vectorized(bbdata_a['tiedbeam_baseband'][
-                                    iifreq,
-                                    iipol,
-                                    start: stop,
-                                ], DM, f0=f0)[0]
-                        
-                            scan_a_cd_jjpol = intrachannel_dedisp_vectorized(bbdata_a['tiedbeam_baseband'][
-                                    iifreq,
-                                    jjpol,
-                                    start: stop,
-                                ], DM, f0=f0)[0]
-
-                            _vis = fft_corr(scan_a_cd_iipol,scan_a_cd_jjpol)
+                            _vis = fft_corr(scan_a_cd[iifreq,iipol,:],scan_a_cd[iifreq,jjpol,:])
                             auto_vis[iifreq, pointing, iipol, jjpol, jjscan, :] = np.concatenate(
                                 (_vis[:max_lag+1], _vis[-max_lag:]))
                         
@@ -158,9 +142,8 @@ def crosscorr_core_vectorized(
 
     vis_shape = (n_freq, n_pointings, n_pol, n_pol, n_scan, 2 * max_lag + 1)
     cross = np.zeros(vis_shape, dtype=bbdata_a['tiedbeam_baseband'].dtype)
-
+    f0 = bbdata_b.index_map["freq"]["centre"] #shape is (nfreq)
     for npointing in range(n_pointings):
-        f0 = bbdata_b.index_map["freq"]["centre"] #shape is (nfreq)
         for jjscan in range(n_scan):
             if type(window)==int:
                 window_jjscan=window
@@ -197,7 +180,7 @@ def crosscorr_core_vectorized(
             scan_a, scan_b_fs = get_aligned_scans_vectorized(
                 bbdata_a, bbdata_b, t_a_indices, window_jjscan, geodelays,
                 complex_conjugate_convention=complex_conjugate_convention, intra_channel_sign=intra_channel_sign, sample_rate=sample_rate,
-                npointing=npointing,npol=n_pol
+                npointing=npointing,n_pol=n_pol
             )
 
             #######################################################

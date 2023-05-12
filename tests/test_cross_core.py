@@ -90,7 +90,7 @@ def test_autocorr():
     R=np.ones((nfreq,nscan))
     max_lag=10
     window=np.ones(nscan)*40
-    vectorized_autocorr=autocorr_core_vectorized(DM = 0,bbdata_a=bbdata_a, t_a=t_a,window=window,R=R,max_lag=max_lag)
+    vectorized_autocorr=autocorr_core_vectorized(DM = 1.2,bbdata_a=bbdata_a, t_a=t_a,window=window,R=R,max_lag=max_lag)
     window=np.ones((nfreq,nscan))*40
     for i in range(nscan):
         assert (vectorized_autocorr[...,i,0,0,0,0]==amplitude_00).all()==True
