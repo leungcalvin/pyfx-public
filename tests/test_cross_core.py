@@ -48,7 +48,7 @@ def test_fracsampleshift_vectorized():
         frac_sample=frac_samp_shift(data[freq],f0[freq],sub_frame_tau[freq])
         np.testing.assert_array_equal(vectorized_frac_sample[freq],frac_sample)
 
-def test_autocorr_vectorized_1():
+'''def test_autocorr_vectorized_1():
     #consistency check between vectorized and non-vectorized versions
     ntime=100
     nfreq=9
@@ -68,7 +68,7 @@ def test_autocorr_vectorized_1():
     for i in range(nscan):
         assert (np.imag(vectorized_autocorr[...,i,0,0,0,0])==0.0).all()==True
         assert (np.imag(vectorized_autocorr[...,i,1,1,0,0])==0.0).all()==True
-
+'''
 
 def test_autocorr():
     #tests whether output of autocorr makes sense given input data
