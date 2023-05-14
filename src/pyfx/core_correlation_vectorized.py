@@ -27,87 +27,73 @@ def autocorr_core_vectorized(
     Inputs:
     -------
     DM - the DM with which we de-smear the data before the final gating. for continuum sources, set dispersion measure to 0.
-    bbdata_a - baseband data. Needs to have the property .fr
-    t_a[i,j] - start times at ith frequency, for jth time chunk, for telescope A. Upper layer should ensure that this is of size (nfreq,npointing, nscan). 
-    window[j] - integer or np.array of size (nscan) holding length of time chunk window in frames. Upper layer should assert that this is of size (npointing,nscan).
-    R[i,j] - float or np.array of size (nfreq,npointing,nscan), i.e. the fraction of window over which we gate. 
-        CorrJob will ensure that this is less than 1, and that this is of size (nfreq, npointing, nscan).
-    max_lag - int
-        Maximum (absolute value) lag (in frames) for auto-correlation (useful for very long time series data). Outer layer of the code should check that this is less than 1/2 of the window size times R[i,j]. 
-    n_pol - int 
-        Number of polarizations in data: 2 always.
+    bbdata_a - baseband data. Needs to have "tiedbeam_baseband" data of size (nfreq,npointing*npol.ntime)
+    t_a[i,j] - start times at ith frequency, for jth time chunk, for telescope A. Upper layer should ensure that this is of size (nfreq,nscan). 
+    window[j] - integer or np.array of size (nscan) holding length of time chunk window in frames. Upper layer should assert that this is of size (nscan).
+    R[i,j] - float or np.array of size (nfreq,nscan). zFraction of time chunk (defines pulse window). Upper layer should ensure that this is less than 1, and that this is of size nxm.
+    max_lag - maximum (absolute value) lag (in frames) for auto-correlation (useful for very long time series data). Outer layer of the code should check that this is less than 1/2 of the window size times R[i,j]. 
+    n_pol - number of polarizations in data
     Outputs:
     -------
     auto_vis - array of autocorrelations with shape (nfreq, npointing, npol, npol, nscan,nlag)
 
     """
-    n_freq = len(bbdata_a.freq)
+    n_freq = bbdata_a.nfreq
     n_scan = np.size(t_a, axis=-1)
-    # SA: basing this off of how bbdata is arranged now; user should be notified of how data is arranged in axes in readme
     n_pointings = bbdata_a["tiedbeam_baseband"].shape[1] // n_pol
 
     vis_shape = (n_freq, n_pointings, n_pol, n_pol, n_scan, 2 * max_lag + 1)
     auto_vis = np.zeros(vis_shape, dtype=bbdata_a['tiedbeam_baseband'].dtype)
+    f0 = bbdata_a.index_map["freq"]["centre"] #shape is (nfreq)
 
-    for pointing in range(n_pointings):
-        for iipol in range(n_pol):
-            for jjpol in range(n_pol):
-                for jjscan in range(n_scan):
-                    if type(window)==int:
-                        window_jjscan=window
-                    else:
-                        window_jjscan=window[jjscan]
+    
+    for jjscan in range(n_scan):
+        if type(window)==int:
+            window_jjscan=window
+        else:
+            window_jjscan=window[jjscan]
 
-                    t_a_indices = t_a[:, pointing, jjscan]  # array of length nfreq
+        t_a_indices = t_a[:, jjscan]  # array of length nfreq
 
-                    if isinstance(R,collections.abc.Sized)==False:#should be 1 for continuum sources                    
-                        r_jjscan=R
-                    elif len(np.unique(R[:,jjscan]))==1:
-                        r_jjscan=R[0,jjscan]
+        if isinstance(R,collections.abc.Sized)==False:#should be 1 for continuum sources                    
+            r_jjscan=R
+        elif len(np.unique(R[:,jjscan]))==1:
+            r_jjscan=R[0,jjscan]
 
-                    else: # "on" window varies as a function of frequency (e.g. pulsar)
-                        r_jjscan=R[:,jjscan] #np array of size (nfreq)
+        else: # "on" window varies as a function of frequency (e.g. pulsar)
+            r_jjscan=R[:,jjscan] #np array of size (nfreq)
 
-                    if isinstance(r_jjscan,collections.abc.Sized)==False and len(np.unique(t_a_indices))==1:
-                        # the simplest case, e.g. continuum source, we save time by completely vectorizing over frequency
+        if isinstance(r_jjscan,collections.abc.Sized)==False and len(np.unique(t_a_indices))==1:
+            # the simplest case, e.g. continuum source, we save time by completely vectorizing over frequency
+            for pointing in range(n_pointings):
+                for iipol in range(n_pol):
+                    for jjpol in range(n_pol):
                         r_ij=r_jjscan
                         start = int((window_jjscan - window_jjscan*r_ij) // 2)+t_a_indices[0]
                         stop = int((window_jjscan + window_jjscan*r_ij) // 2)+t_a_indices[0]
-                        print(start)
-                        print(stop)
-
-                        _vis = fft_corr(
-                            bbdata_a['tiedbeam_baseband'][
-                                :,
-                                iipol,
-                                start: stop,
-                            ],
-                            bbdata_a['tiedbeam_baseband'][
-                                :,
-                                jjpol,
-                                start: stop,
-                            ])
+                        scan_a_cd = intrachannel_dedisp_vectorized(bbdata_a['tiedbeam_baseband'][:,:,start:stop], DM, f0=f0)
+                        _vis = fft_corr(scan_a_cd[:,iipol,:],scan_a_cd[:,jjpol,:])
                         auto_vis[:, pointing, iipol, jjpol, jjscan, :] = np.concatenate((_vis[:,:max_lag+1], _vis[:,-max_lag:]),axis=-1)
-                    else:
-                        # if the start and stop times are not the same as a function of frequency, there is no easy way of vectorizing this. Resort to a for loop and pray that numba supports ffts someday. 
+                    
+        else:
+            # if the start and stop times are not the same as a function of frequency, there is no easy way of vectorizing this. 
+            # We can be smarter about this based on the window size, but for now
+            # be lazy and resort to a for loop 
+        
+            ## note: this is very slow
+            scan_a_cd = intrachannel_dedisp_vectorized(bbdata_a['tiedbeam_baseband'][:,:,:,], DM, f0=f0)
+            for pointing in range(n_pointings):
+                for iipol in range(n_pol):
+                    for jjpol in range(n_pol):
                         if isinstance(r_jjscan,collections.abc.Sized)==False:
                             r_jjscan=np.full(n_freq,r_jjscan)
                         for iifreq,r_ij in enumerate(r_jjscan):
                             start = int((window_jjscan - window_jjscan*r_ij) // 2)+t_a_indices[iifreq]
                             stop = int((window_jjscan + window_jjscan*r_ij) // 2)+t_a_indices[iifreq]
-                            _vis = fft_corr(
-                                bbdata_a['tiedbeam_baseband'][
-                                    iifreq,
-                                    iipol,
-                                    start: stop,
-                                ],
-                                bbdata_a['tiedbeam_baseband'][
-                                    iifreq,
-                                    jjpol,
-                                    start: stop,
-                                ])
+                            _vis = fft_corr(scan_a_cd[iifreq,iipol,:],scan_a_cd[iifreq,jjpol,:])
                             auto_vis[iifreq, pointing, iipol, jjpol, jjscan, :] = np.concatenate(
                                 (_vis[:max_lag+1], _vis[-max_lag:]))
+                        
     return auto_vis
 
 def crosscorr_core_vectorized(
@@ -156,9 +142,8 @@ def crosscorr_core_vectorized(
 
     vis_shape = (n_freq, n_pointings, n_pol, n_pol, n_scan, 2 * max_lag + 1)
     cross = np.zeros(vis_shape, dtype=bbdata_a['tiedbeam_baseband'].dtype)
-
+    f0 = bbdata_b.index_map["freq"]["centre"] #shape is (nfreq)
     for npointing in range(n_pointings):
-        f0 = bbdata_b.index_map["freq"]["centre"] #shape is (nfreq)
         for jjscan in range(n_scan):
             if type(window)==int:
                 window_jjscan=window
@@ -195,17 +180,13 @@ def crosscorr_core_vectorized(
             scan_a, scan_b_fs = get_aligned_scans_vectorized(
                 bbdata_a, bbdata_b, t_a_indices, window_jjscan, geodelays,
                 complex_conjugate_convention=complex_conjugate_convention, intra_channel_sign=intra_channel_sign, sample_rate=sample_rate,
-                npointing=npointing,npol=n_pol
+                npointing=npointing,n_pol=n_pol
             )
 
             #######################################################
             ######### intrachannel de-dispersion ##################
-            if DM==0: #save computation time
-                scan_a_cd = scan_a
-                scan_b_fs_cd = scan_b_fs
-            else:
-                scan_a_cd = intrachannel_dedisp_vectorized(scan_a, DM, f0=f0)
-                scan_b_fs_cd = intrachannel_dedisp_vectorized(scan_b_fs, DM, f0=f0)
+            scan_a_cd = intrachannel_dedisp_vectorized(scan_a, DM, f0=f0)
+            scan_b_fs_cd = intrachannel_dedisp_vectorized(scan_b_fs, DM, f0=f0)
 
             #######################################################
             # Now that the pulses are centered at zero, calculate
@@ -380,9 +361,11 @@ def frac_samp_shift_vectorized(
     complex_conjugate_convention:int=-1, 
     intra_channel_sign:int=1, 
     sample_rate: float=2.56):
-    """Fractional sample correction: coherently shifts data within a channel via a fractional phase shift of the form exp(2j*pi*f*sub_frame_tau).
-
-    data : np.ndarray of shape (ntime)
+    """
+    Coherently shifts data within a channel via a fractional phase shift of the form exp(2j*pi*f*sub_frame_tau).
+    Inputs:
+    -------    
+    data : np.ndarray of shape (nfreq,npol*npointing,ntime)
 
     f0 : frequency channel center.
 
@@ -413,11 +396,20 @@ def intrachannel_dedisp_vectorized(
     sample_rate: float = 2.56):
     """Intrachannel dedispersion: brings data to center of channel.
     This is Eq. 5.17 of Lorimer and Kramer 2004 textbook, but ONLY the last term (proportional to f^2), not the other two terms (independent of f and linearly proportional to f respectively).
-    data : np.ndarray of shape (nfreq,...,ntime)
+    Inputs:
+    -------
+    data : np.ndarray of shape (nfreq,npol*npointing,ntime)
     f0 : np.ndarray of shape (nfreq) holding channel centers.
-    sample_rate : sampling rate of data in microseconds"""
-    n = data.shape[-1]
-    f = np.fft.fftfreq(n) * sample_rate
-    transfer_func = np.exp(-2j * np.pi * K_DM * DM * f[np.newaxis,:]**2 / f0[:,np.newaxis]**2 / (f[np.newaxis,:] + f0[:,np.newaxis]))  
-    data = np.fft.ifft(np.fft.fft(data, axis=-1) * transfer_func[:,np.newaxis,:],axis=-1)
-    return data
+    sample_rate : sampling rate of data in microseconds
+    Outputs:
+    -------
+    data: np.ndarray of shape (nfreq,npol*npointing,ntime)
+    """
+    if DM==0: #save computation time
+        return data
+    else:        
+        n = data.shape[-1]
+        f = np.fft.fftfreq(n) * sample_rate
+        transfer_func = np.exp(-2j * np.pi * K_DM * DM * f[np.newaxis,:]**2 / f0[:,np.newaxis]**2 / (f[np.newaxis,:] + f0[:,np.newaxis]))  
+        data = np.fft.ifft(np.fft.fft(data, axis=-1) * transfer_func[:,np.newaxis,:],axis=-1)
+        return data

@@ -48,8 +48,9 @@ from scipy.fft import fft, ifft, next_fast_len
 from decimal import Decimal
 from astropy.time import Time,TimeDelta
 
-from core_correlation import autocorr_core, crosscorr_core
-from misc import station_from_bbdata, get_all_time0, get_all_im_freq, CALCFILE_DIR
+from pyfx.core_correlation import autocorr_core, crosscorr_core
+from pyfx.bbdata_io import station_from_bbdata, get_all_time0, get_all_im_freq
+from pyfx.config import CALCFILE_DIR
 
 from coda.core import VLBIVis
 
