@@ -5,7 +5,6 @@ import torch
 import torch.fft as torch_fft
 import time
 
-print('THIS IS AN EDIT')
 # note - scipy.fft is faster than numba.fft
 def fft_corr_gpu(w1: torch.Tensor, w2: torch.Tensor, axis=-1):
     """Correlates but vectorizes over all axes except the correlation axis (-1 by default).

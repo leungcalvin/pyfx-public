@@ -1,7 +1,6 @@
-"""Miscellaneous utilities for PyFX."""
-from difxcalc_wrapper import telescopes
+"""Utilities for reading BBData without loading in the full dataset."""
+
 import h5py
-CALCFILE_DIR = '/scratch/calvin' # where .calc files are temporarily saved during CorrJobs
 
 def station_from_bbdata(bbdata):
     """Returns station name for use with difxcalc"""
