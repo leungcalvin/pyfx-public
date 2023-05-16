@@ -409,7 +409,6 @@ def intrachannel_dedisp_vectorized(
         return data
     else:        
         n = data.shape[-1]
-        f = np.fft.fftfreq(n) * sample_rate
-        transfer_func = np.exp(-2j * np.pi * K_DM * DM * f[np.newaxis,:]**2 / f0[:,np.newaxis]**2 / (f[np.newaxis,:] + f0[:,np.newaxis]))  
-        data = np.fft.ifft(np.fft.fft(data, axis=-1) * transfer_func[:,np.newaxis,:],axis=-1)
-        return data
+        f = np.fft.fftfreq(n,d = sample_rate)
+        transfer_func = np.exp(2j * np.pi * K_DM * DM * 1e6 * f[np.newaxis,:]**2 / f0[:,np.newaxis]**2 / (f[np.newaxis,:] + f0[:,np.newaxis]))  
+        return np.fft.ifft(np.fft.fft(data, axis=-1) * transfer_func[:,np.newaxis,:],axis=-1)

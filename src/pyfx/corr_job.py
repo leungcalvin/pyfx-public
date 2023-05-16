@@ -35,12 +35,13 @@ We can use difxcalc's baseline_delay function evaluated at t00 to calculate the 
 """
 import os,datetime
 import numpy as np
+import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 from astropy.time import Time
 import astropy.coordinates as ac
 import astropy.units as un
 from baseband_analysis.core import BBData
-from baseband_analysis.core.sampling import fill_waterfall
+from baseband_analysis.core.sampling import fill_waterfall,_scrunch
 from difxcalc_wrapper import io, runner, telescopes
 from difxcalc_wrapper.config import DIFXCALC_CMD
 from scipy.fft import fft, ifft, next_fast_len
@@ -493,16 +494,16 @@ class CorrJob:
         fill_waterfall(bbdata_A,write = True)
         if dm is not None:
             from baseband_analysis.core.dedispersion import coherent_dedisp
-            # TODO: replace with pyfx.core_correlation.intrachannel_dedisp
+            # TODO: CL: need to replace with pyfx.core_correlation.intrachannel_dedisp, which isn't working for me?
             wfall = coherent_dedisp(data = bbdata_A,DM = dm)
         else:
             wfall = bbdata_A['tiedbeam_baseband'][:]
         wwfall = np.abs(wfall)**2
         wwfall -= np.median(wwfall,axis = -1)[:,:,None]
         wwfall /= median_abs_deviation(wwfall,axis = -1)[:,:,None]
-        sww = _scrunch(wwfall,fscrunch = fscrunch, tscrunch = tscrunch)
         if tscrunch is None:
             tscrunch = int(np.median(w) // 10 )
+        sww = _scrunch(wwfall,fscrunch = fscrunch, tscrunch = tscrunch)
         del wwfall
         f = plt.figure()
         plt.imshow(sww[:,pointing] + sww[:,pointing+1],aspect = 'auto',vmin = -1,vmax = 3)
@@ -527,7 +528,7 @@ class CorrJob:
         plt.xlim(np.median(xmin),np.median(xmax))
         plt.ylim(1024 / fscrunch,0)
         plt.ylabel('Freq ID')
-        plt.xlabel('Time ({tscrunch:0.1f} frames)')
+        plt.xlabel(f'Time ({tscrunch:0.1f} frames)')
         return f
 
     def run_correlator_job(self,t_ij, w_ij, r_ij, dm = None, event_id = None, out_h5_file = None):
@@ -550,8 +551,8 @@ class CorrJob:
         """
         output = VLBIVis()
         pointing_centers = np.zeros((len(self.pointings),),dtype = output._dataset_dtypes['pointing'])
-        pointing_centers['ra'] = self.ras
-        pointing_centers['dec'] = self.decs
+        pointing_centers['corr_ra'] = self.ras
+        pointing_centers['corr_dec'] = self.decs
         for iia in range(len(self.tel_names)):
             bbdata_a = BBData.from_file(self.bbdata_filepaths[iia])
             fill_waterfall(bbdata_a, write = True)
