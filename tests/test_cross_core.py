@@ -2,8 +2,7 @@ import pytest
 import numpy as np
 import copy
 import os
-from pyfx.core_correlation import intrachannel_dedisp,frac_samp_shift,autocorr_core
-from pyfx.core_correlation_vectorized import intrachannel_dedisp_vectorized,frac_samp_shift_vectorized,autocorr_core_vectorized,crosscorr_core_vectorized
+from pyfx.core_correlation import autocorr_core,crosscorr_core
 from pyfx.core_vis import extract_subframe_delay, extract_frame_delay
 
 
@@ -43,31 +42,6 @@ class VeryBasicBBData:
                 "ctime_offset": self.ctime_offset
             }
         
-
-def test_dedispersion_vectorized():
-    #consistency check between vectorized and non-vectorized versions
-    ntime=7
-    nfreq=9
-    DM=np.random.uniform(30,500)
-    data=np.random.uniform(-5e6,5e6,(nfreq,8,ntime))+1j*np.random.uniform(-5e6,5e6,(nfreq,8,ntime))
-    f0=np.linspace(400,800,9)
-    vectorized_dedispersed=intrachannel_dedisp_vectorized(data,DM,f0)
-    for freq in range(len(f0)):
-        dedispersed=intrachannel_dedisp(data[freq],DM,f0[freq])
-        np.testing.assert_array_equal(vectorized_dedispersed[freq],dedispersed)
-
-def test_fracsampleshift_vectorized():
-    #consistency check between vectorized and non-vectorized versions
-    ntime=7
-    nfreq=9
-    data=np.random.uniform(-5e6,5e6,(nfreq,8,ntime))+1j*np.random.uniform(-5e6,5e6,(nfreq,8,ntime))
-    f0=np.linspace(400,800,9)
-    sub_frame_tau=np.random.uniform(-1,1,(nfreq,ntime))
-    vectorized_frac_sample=frac_samp_shift_vectorized(data, f0, sub_frame_tau)
-    for freq in range(len(f0)):
-        frac_sample=frac_samp_shift(data[freq],f0[freq],sub_frame_tau[freq])
-        np.testing.assert_array_equal(vectorized_frac_sample[freq],frac_sample)
-
 def test_autocorr_sim():
     #tests whether output of autocorr makes sense given "simulated" input data
     ntime=100
@@ -88,7 +62,7 @@ def test_autocorr_sim():
     R=np.ones((nfreq,nscan,npointing))
     max_lag=10
     window=np.ones((nscan,npointing))*40
-    vectorized_autocorr=autocorr_core_vectorized(DM = 1.2,bbdata_a=bbdata_a, t_a=t_a,window=window,R=R,max_lag=max_lag)
+    vectorized_autocorr=autocorr_core(DM = 1.2,bbdata_a=bbdata_a, t_a=t_a,window=window,R=R,max_lag=max_lag)
     assert np.isclose(vectorized_autocorr[...,:,0,0,0,0],amplitude_00).all()
     assert np.isclose(vectorized_autocorr[...,:,1,1,0,0],amplitude_11).all()
 
@@ -167,7 +141,7 @@ def test_continuum_calibrator():
         window[nscan]*=ntime  # set to 1000 for smaller test, max 43670
     
     weight=np.ones((1024,1,1,ntime))
-    cross=crosscorr_core_vectorized(bbdata_a=chime_bbdata, bbdata_b=out_bbdata, t_a=t_a, window=window, R=R, calc_results=calcresults,DM=0,
+    cross=crosscorr_core(bbdata_a=chime_bbdata, bbdata_b=out_bbdata, t_a=t_a, window=window, R=R, calc_results=calcresults,DM=0,
                         index_A=1, index_B=0,sample_rate=2.56,max_lag=max_lag,n_pol=2,
                         weight=weight)
 
@@ -195,4 +169,3 @@ def test_continuum_calibrator():
     assert np.isclose(delays[1,1],-0.11148437,rtol=1e-05) #should be good to sub nanosecond
     assert snrs[0,0]>=53
     assert snrs[1,1]>=49
-
