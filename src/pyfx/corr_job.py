@@ -35,15 +35,17 @@ We can use difxcalc's baseline_delay function evaluated at t00 to calculate the 
 """
 import os,datetime
 import numpy as np
+import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 from astropy.time import Time
 import astropy.coordinates as ac
 import astropy.units as un
 from baseband_analysis.core import BBData
-from baseband_analysis.core.sampling import fill_waterfall
+from baseband_analysis.core.sampling import fill_waterfall,_scrunch
 from difxcalc_wrapper import io, runner, telescopes
 from difxcalc_wrapper.config import DIFXCALC_CMD
 from scipy.fft import fft, ifft, next_fast_len
+from scipy.stats import median_abs_deviation
 
 from decimal import Decimal
 from astropy.time import Time,TimeDelta
@@ -117,9 +119,9 @@ def _ti0_from_t00_bbdata(bbdata_filename, t_00,f0):
     ti0 = extrapolate_to_full_band(sparse_ti0, im_freq['id'][:])['ctime']
     return ti0
 
-def _ti0_from_t00_dm(t00, f0, dm, fi):
+def _ti0_from_t00_dm(bbdata_filename, t00, f0, dm, fi):
     ti0 = t00 + K_DM * dm * (fi**-2 - f0**-2)  # for fi = infinity, ti0 < t00.
-    return round_to_integer_frame(ti0, bbdata)
+    return round_to_integer_frame(ti0, bbdata_filename)
 
 def validate_wij(w_ij, t_ij, r_ij, dm=None):
     """Performs some following checks on w_ij
@@ -145,7 +147,7 @@ def validate_wij(w_ij, t_ij, r_ij, dm=None):
             if we are using coherent dedispersion, this ensures that we have sufficient frequency resolution to upchannelize.
     
     """
-    assert w_ij.shape == t_ij.shape == r_ij.shape
+    assert w_ij.shape == t_ij[0].shape == r_ij.shape
     iisort = np.argsort(t_ij[0,0,0,:]) # assume sorting of time windows is same for all stations, freq, and pointings
     # overlapping sub-integrations: 
     sub_scan_start = t_ij + 2.56e-6 * (w_ij // 2 - (w_ij * r_ij / 2))
@@ -159,8 +161,8 @@ def validate_wij(w_ij, t_ij, r_ij, dm=None):
 
     if dm is not None:  # check that wij exceeds smearing time
         dm_smear_sec = K_DM * dm * 0.390625 / freq**3
-        ratio = np.min(w_ij * 2.56e-6, axis=-1) / dm_smear_sec # check all frequency channels
-        assert (ratio < 1).all(), f"For DM = {dm}, w_ij needs to be increased by a factor of {1/np.max(ratio)} to not clip the pulse within a channel" 
+        diff = np.min(w_ij * 2.56e-6 - dm_smear_sec[:,None,None], axis=(-2,-1)) # check all frequency channels
+        assert (diff > 0).all(), f"For DM = {dm}, w_ij needs to be increased by {-(np.min(diff)/ 2.56e-6):0.2f} frames to not clip the pulse within a channel" 
     return w_ij
 
 def round_to_integer_frame(timestamps: np.ndarray, bbdata_filename):
@@ -320,6 +322,7 @@ class CorrJob:
             latest_end_unix = max(latest_end_unix, 
                 this_bbdata['time0']['ctime'][-1] + this_bbdata.ntime)
 
+        earliest_start_unix = int(earliest_start_unix - 1) # buffer
         duration_sec = int(latest_end_unix - earliest_start_unix + 1.0 )
         calcfile_name = os.path.join(CALCFILE_DIR, 'pyfx_corrjob_' + str(bbdata_0.attrs['event_id']) + '_' + datetime.datetime.now().strftime('%Y%m%dT%H%M%S') + '.calc')
         _ = io.make_calc(
@@ -415,9 +418,9 @@ class CorrJob:
         
         kwargs : 'dm' and 'f0', 'period_frames', 'pdot','wi'
         """
+        bbdata_ref_filename = self.bbdata_filepaths[self.tel_names.index(ref_station)]
         # First: if t0f0 is a bunch of strings, then get t0 & f0 from the BBData. 
         if type(t0f0[0]) is not float and type(t0f0[1]) is not float:
-            bbdata_ref_filename = self.bbdata_filepaths[self.tel_names.index(ref_station)]
             t00, f0 = self.t0_f0_from_bbdata_filename(t0f0, bbdata_ref_filename)
         else: # OK, I guess we were given t00 and f0
             (t00, f0) = t0f0
@@ -426,11 +429,11 @@ class CorrJob:
         if freq_offset_mode == "bbdata":
             _ti0 = _ti0_from_t00_bbdata(bbdata_ref_filename, t_00 = t00, f0 = f0) 
         if freq_offset_mode == "dm":
-            _ti0 = _ti0_from_t00_dm(t00, f0, dm = dm, fi = FREQ)
+            _ti0 = _ti0_from_t00_dm(bbdata_ref_filename, t00, f0, dm = dm, fi = FREQ)
 
         # If _ti0 is a TOA, need to shift _ti0 back by half a scan length 
         if start_or_toa == 'toa':
-            _ti0 -= Window  / 2 # Scan duration given by :Window:, not :period_frames:!
+            _ti0 -= Window *2.56e-6 / 2  # Scan duration given by :Window:, not :period_frames:!
             print('INFO: Using TOA mode: shifting all scans to be centered on _ti0')
 
         assert Window.shape[0] == 1024, "Need to pass in the length of the integration as a function of frequency channel!"
@@ -453,9 +456,9 @@ class CorrJob:
         
         # Check that the time spacing works.
         if Window.ndim == 1: # broadcast to the shape of tij
-            Window = Window[:,None,None] + np.zeros_like(t_ij_station_pointing)
+            Window = Window[:,None,None] + np.zeros_like(t_ij_station_pointing[0])
         if r_ij.ndim == 1: # broadcast to the shape of tij
-            r_ij = r_ij[:,None,None] + np.zeros_like(t_ij_station_pointing)
+            r_ij = r_ij[:,None,None] + np.zeros_like(t_ij_station_pointing[0])
         
         validate_wij(Window,t_ij_station_pointing, r_ij, dm = dm)
 
@@ -485,6 +488,49 @@ class CorrJob:
                 tij_sp[iitel,:,jjpointing,:] = tij + tau_ij
         return tij_sp
 
+    def visualize_twr(self,bbdata_ref_filename,t,w,r,pointing = 0,dm = None,fscrunch = 4, tscrunch = None):
+        bbdata_A = BBData.from_file(bbdata_ref_filename)
+        iiref = self.tel_names.index(station_from_bbdata(bbdata_A))
+        fill_waterfall(bbdata_A,write = True)
+        if dm is not None:
+            from baseband_analysis.core.dedispersion import coherent_dedisp
+            # TODO: CL: need to replace with pyfx.core_correlation.intrachannel_dedisp, which isn't working for me?
+            wfall = coherent_dedisp(data = bbdata_A,DM = dm)
+        else:
+            wfall = bbdata_A['tiedbeam_baseband'][:]
+        wwfall = np.abs(wfall)**2
+        wwfall -= np.median(wwfall,axis = -1)[:,:,None]
+        wwfall /= median_abs_deviation(wwfall,axis = -1)[:,:,None]
+        if tscrunch is None:
+            tscrunch = int(np.median(w) // 10 )
+        sww = _scrunch(wwfall,fscrunch = fscrunch, tscrunch = tscrunch)
+        del wwfall
+        f = plt.figure()
+        plt.imshow(sww[:,pointing] + sww[:,pointing+1],aspect = 'auto',vmin = -1,vmax = 3)
+
+        y = np.arange(1024)
+        for iiscan in range(t.shape[-1]):
+            x_start = (t[iiref,:,pointing,iiscan] - bbdata_A['time0']['ctime'][:]) / (2.56e-6 * tscrunch)
+            x_end = x_start + w[:,pointing,iiscan] / tscrunch
+            x_mid = x_start + (x_end - x_start) * 0.5 
+            x_rminus = x_mid - (x_end - x_start) * 0.5 * r[:,pointing,iiscan]
+            x_rplus = x_mid + (x_end - x_start) * 0.5 * r[:,pointing,iiscan]
+            plt.fill_betweenx(x1 = x_start, x2 = x_end,y = y/fscrunch,alpha = 0.15)
+            if iiscan == 0:
+                linestyle = '-'
+            else:
+                linestyle = '--'
+            plt.plot(x_start, y/fscrunch,linestyle = linestyle,color = 'black')
+            plt.plot(x_end, y/fscrunch,linestyle = linestyle,color = 'black')
+        xmin = np.min(t[iiref,:,pointing,:] - bbdata_A['time0']['ctime'][:,None],axis = -1) / (2.56e-6 * tscrunch)
+        xmax = np.max(t[iiref,:,pointing,:] - bbdata_A['time0']['ctime'][:,None],axis = -1) / (2.56e-6 * tscrunch)
+
+        plt.xlim(np.median(xmin),np.median(xmax))
+        plt.ylim(1024 / fscrunch,0)
+        plt.ylabel('Freq ID')
+        plt.xlabel(f'Time ({tscrunch:0.1f} frames)')
+        return f
+
     def run_correlator_job(self,t_ij, w_ij, r_ij, dm = None, event_id = None, out_h5_file = None):
         """Run auto- and cross- correlations.
 
@@ -497,16 +543,16 @@ class CorrJob:
         t_ij : np.ndarray
             Of start times as a function of (n_station, n_freq, n_pointing, n_time)
         w_ij : np.ndarray
-            Of start times as a function of (n_station, n_freq, n_pointing, n_time)
+            Of start times as a function of (n_freq, n_pointing, n_time)
         r_ij : np.ndarray
-            Of start times as a function of (n_station, n_freq, n_pointing, n_time)
+            Of start times as a function of (n_freq, n_pointing, n_time)
         dm : float
             A dispersion measure for de-smearing. Fractional precision needs to be 10%.
         """
         output = VLBIVis()
         pointing_centers = np.zeros((len(self.pointings),),dtype = output._dataset_dtypes['pointing'])
-        pointing_centers['ra'] = self.ras
-        pointing_centers['dec'] = self.decs
+        pointing_centers['corr_ra'] = self.ras
+        pointing_centers['corr_dec'] = self.decs
         for iia in range(len(self.tel_names)):
             bbdata_a = BBData.from_file(self.bbdata_filepaths[iia])
             fill_waterfall(bbdata_a, write = True)
