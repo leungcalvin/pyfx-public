@@ -199,28 +199,45 @@ def crosscorr_core(
             t_a_indices = t_a[:, jjscan,kkpointing]  # array of length 1024
             t0_a = bbdata_a["time0"]["ctime"][:]
             t0_a_offset=bbdata_a["time0"]["ctime_offset"][:]+ t_a_indices * (sample_rate*1e-6)  # array of length 1024
-
+    
+            #start_times = Time(
+            #    t0_a,
+            #    val2=t0_a_offset,
+            #    format="unix",
+            #    precision=9,
+            #)
             start_times = Time(
-                t0_a,
-                val2=t0_a_offset,
+                t0_a[0],
+                val2=t0_a_offset[0],
                 format="unix",
                 precision=9,
             )
             # using telescope A times as reference time
             if fast==True:
-                dt_vals=(sample_rate * 1e-6 * (t_a_indices[:, np.newaxis] + 1 + np.arange(wij)))
-                geodelays_flattened = calc_results.retarded_baseline_delay(
-                    ant1=index_A, ant2=index_B, time=start_times, src=kkpointing, delay_sign=0, self_consistent=False,
-                    frame_dt=dt_vals
+                delta_t=t0_a-t0_a[0]+t0_a_offset-t0_a_offset[0]
+                #dt_vals=(sample_rate * 1e-6 * (t_a_indices[:, np.newaxis] + 1 + np.arange(wij)))
+                dt_vals=(sample_rate * 1e-6 * (t_a_indices[:, np.newaxis] + 1 + np.arange(wij))+delta_t[:,np.newaxis])
+                #geodelays_flattened = calc_results.retarded_baseline_delay(
+                #    ant1=index_A, ant2=index_B, time=start_times, src=kkpointing, delay_sign=0, self_consistent=False,
+                #    dt=dt_vals
+                #)
+                geodelays_flattened = calc_results.baseline_delay(
+                    ant1=index_A, ant2=index_B, time=start_times, src=kkpointing,scan=jjscan,
+                    dt=dt_vals
                 )
                 geodelays = geodelays_flattened.reshape(dt_vals.shape)
             else:
+                start_times = Time(
+                    t0_a,
+                    val2=t0_a_offset,
+                    format="unix",
+                    precision=9,
+                )
                 geodelays=np.zeros((1024,wij),dtype=float)
                 for i in range(n_freq):
                     query_times = start_times[i] + sample_rate*1e-6 * un.s * (t_a_indices[i]+np.arange(wij))
-                    geodelays[i,:]=calc_results.retarded_baseline_delay(
-                        ant1=index_A, ant2=index_B, time=query_times, src=kkpointing,delay_sign=0,self_consistent=False
-                    )
+                    geodelays[i,:]=calc_results.baseline_delay(
+                        ant1=index_A, ant2=index_B, time=query_times, src=kkpointing,scan=jjscan)
 
             # Fringestopping B -> A
             scan_a, scan_b_fs = get_aligned_scans(
