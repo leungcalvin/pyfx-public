@@ -5,14 +5,22 @@ import torch
 import torch.fft as torch_fft
 import time
 
-# note - scipy.fft is faster than numba.fft
 def fft_corr_gpu(
     w1: torch.Tensor, 
     w2: torch.Tensor, 
     axis=-1
-):
+ ) -> torch.Tensor:
     """Correlates but vectorizes over all axes except the correlation axis (-1 by default).
-    out : torch.Tensor"""
+    Inputs:
+    -------
+    w1 : torch.Tensor
+    w2 : torch.Tensor
+
+    Outputs:
+    -------
+    out : torch.Tensor
+        w1 cross cross correlated with w2
+    """
     assert axis==-1, "fft in pytorch is only supported along last axis of data"
     x=torch_fft.fft(w1)
     del(w1)
@@ -26,7 +34,8 @@ def fft_corr(
     w1: np.ndarray, 
     w2: np.ndarray, 
     axis=-1
-):
+ ) -> np.ndarray:
+    
     """Correlates but vectorizes over all axes except the correlation axis (-1 by default).
     
     Inputs:
@@ -36,7 +45,10 @@ def fft_corr(
 
     Outputs:
     -------
-    out : np.ndarray"""
+    out : np.ndarray
+        w1 cross cross correlated with w2
+    """
+
     #Correlation between w1 and w2: the output will have lag zero at index 0.
     #out[1:n//2] contains positive lags, out[n//2+1] contains negative lags"
     return ifft(fft(w1, axis=axis) * fft(w2, axis=axis).conj(), axis=axis)
@@ -45,7 +57,8 @@ def max_lag_slice(
     data: np.ndarray, 
     max_lag: int, 
     lag_axis: int=-1
-):
+ ) -> np.ndarray:
+    
     """Downselects an array out to some maximum lag.
     Inputs:
     -------
