@@ -15,8 +15,8 @@ import astropy.units as un
 from astropy.time import Time
 import scipy
 
-DIFXCALC_CMD='/home/shion/projects/rrg-vkaspi-ad/shion/difxcalc11/build/bin/difxcalc'
-DIFXCALC_SCRATCH_DIR='/home/shion/projects/rrg-vkaspi-ad/shion/'
+DIFXCALC_CMD='/home/calvin/difxcalc11/build/bin/difxcalc'
+DIFXCALC_SCRATCH_DIR='/home/calvin/public/'
 
 class VeryBasicBBData:
     def __init__(self,
