@@ -463,7 +463,7 @@ class CorrJob:
         validate_wij(Window,t_ij_station_pointing, r_ij, dm = dm)
 
         self.max_lag = max_lag
-        return t_ij_station_pointing,  Window, r_ij
+        return t_ij_station_pointing,  Window.astype(int), r_ij
 
     def tij_other_stations(self, tij, ref_station = 'chime'):
         """Do this on a per-pointing and per-station basis."""
@@ -494,7 +494,7 @@ class CorrJob:
         fill_waterfall(bbdata_A,write = True)
         if dm is not None:
             from baseband_analysis.core.dedispersion import coherent_dedisp
-            # TODO: CL: need to replace with pyfx.core_correlation.intrachannel_dedisp, which isn't working for me?
+            # TODO: CL: need to replace with pyfx.core_correlation.intrachannel_dedisp
             wfall = coherent_dedisp(data = bbdata_A,DM = dm)
         else:
             wfall = bbdata_A['tiedbeam_baseband'][:]
@@ -507,6 +507,7 @@ class CorrJob:
         del wwfall
         f = plt.figure()
         plt.imshow(sww[:,pointing] + sww[:,pointing+1],aspect = 'auto',vmin = -1,vmax = 3)
+        del bbdata_A
 
         y = np.arange(1024)
         for iiscan in range(t.shape[-1]):
@@ -543,7 +544,7 @@ class CorrJob:
         t_ij : np.ndarray
             Of start times as a function of (n_station, n_freq, n_pointing, n_time)
         w_ij : np.ndarray
-            Of start times as a function of (n_freq, n_pointing, n_time)
+            Of start times as a function of (n_pointing, n_time)
         r_ij : np.ndarray
             Of start times as a function of (n_freq, n_pointing, n_time)
         dm : float
@@ -556,16 +557,23 @@ class CorrJob:
         for iia in range(len(self.tel_names)):
             bbdata_a = BBData.from_file(self.bbdata_filepaths[iia])
             fill_waterfall(bbdata_a, write = True)
+            indices_a = np.round((t_ij[iia] - bbdata_a['time0']['ctime'][:,None,None]) / 2.56e-6).astype(int)
+            # there are scans with missing data...
+            mask_a = (indices_a < 0) + (indices_a > bbdata_a.ntime) 
+            indices_a %= bbdata_a.ntime
+            # ...but we just let the correlator correlate
             auto_vis = autocorr_core(dm, bbdata_a, 
-                                    T_A = t_ij[iia], 
-                                    Window = w_ij[iia], 
-                                    R = r_ij[iia], 
+                                    t_a = indices_a,
+                                    window = w_ij,
+                                    R = r_ij,
                                     max_lag = self.max_lag, 
                                     n_pol = 2)
+            # ...and replace with nans afterward.
+            auto_vis += mask_a[:,:,None,None,None,:] * np.nan # fill with nans where
             int_time = np.zeros(shape = t_ij[iia].shape, dtype = output._dataset_dtypes['time'])
             int_time["ctime"][:] = t_ij[iia]
-            int_time["duration_frames"][:] = w_ij[iia]
-            int_time["dur_ratio"][:] = r_ij[iia]
+            int_time["duration_frames"][:] = w_ij
+            int_time["dur_ratio"][:] = r_ij
             int_time["on_window"][:] = True
             print('TODO: Specify on window in define_scan_params according to source type')
 
@@ -583,11 +591,13 @@ class CorrJob:
                 vis = crosscorr_core(
                         bbdata_a, 
                         bbdata_b, 
-                        t_ij[iia], 
-                        w_ij[iia], 
-                        r_ij[iia], 
+                        indices_a,
+                        w_ij, 
+                        r_ij,
                         self.calcresults, 
                         DM = dm, 
+                        index_A = iia,
+                        index_B = iib,
                         max_lag = self.max_lag, 
                         complex_conjugate_convention = -1, 
                         intra_channel_sign = 1

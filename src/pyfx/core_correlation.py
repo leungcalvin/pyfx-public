@@ -37,7 +37,7 @@ def autocorr_core(
         start times at ith frequency, for jth time chunk, kth pointing for telescope A. Upper layer should ensure that this is of size (nfreq,nscan). 
     
     window[j,k] :
-        integer or np.array of size (nscan,npointing) holding length of time chunk window in frames. Upper layer should assert that this is of size (nscan).
+        integer or np.array of size (npointing,nscan) holding length of time chunk window in frames. Upper layer should assert that this is of size (nscan).
     
     R[i,j,k] :
         float or np.array of size (nfreq,nscan,npointing). zFraction of time chunk (defines pulse window). Upper layer should ensure that this is less than 1, and that this is of size nxm.
@@ -49,7 +49,7 @@ def autocorr_core(
         number of polarizations in data
     Outputs:
     -------
-    auto_vis - array of autocorrelations with shape (nfreq, npointing, npol, npol, nscan,nlag)
+    auto_vis - array of autocorrelations with shape (nfreq, npointing, npol, npol, nlag, nscan)
 
     """
     n_freq = bbdata_a.nfreq
@@ -62,8 +62,8 @@ def autocorr_core(
     
     for kkpointing in range(n_pointings):
         for jjscan in range(n_scan):
-            wij=int(window[jjscan,kkpointing])
-            t_a_indices = t_a[:, jjscan,kkpointing]  # array of length 1024
+            wij=int(window[kkpointing,jjscan])
+            t_a_indices = t_a[:, kkpointing,jjscan]  # array of length 1024
             ## clip telescope A data ##
             a_shape = list(bbdata_a['tiedbeam_baseband'][:,kkpointing:kkpointing+n_pol,:].shape)
             a_shape[-1] = wij
@@ -79,7 +79,7 @@ def autocorr_core(
                                                                     t_a_indices[i]:t_a_indices[i] + wij]
             ######### intrachannel de-dispersion ##################
             scan_a_cd = intrachannel_dedisp(clipped_a, DM, f0=f0)
-            r_jjscan=R[:,jjscan,kkpointing] #np array of size (nfreq)
+            r_jjscan=R[:,kkpointing,jjscan] #np array of size (nfreq)
             if len(np.unique(r_jjscan))==1:
                 r_ij=r_jjscan[0]
                 start = int((wij - wij*r_ij) // 2)
@@ -142,11 +142,11 @@ def crosscorr_core(
         Upper layer should ensure that this is of size ixjxk and contains integers. 
     
     window[j,k] : 
-        np.array of size (nscan, npointings) containing integer numbers, each element is the length of scan window in frames.
+        np.array of size (npointings,nscans) containing integer numbers, each element is the length of scan window in frames.
         Upper layer should ensure that this is of size jxk, contains integers. 
     
     R[i,j,k] :
-        np.array of size (nfreq, nscan, npointings) containing fraction of time chunk (defines pulse window). For continuum sources, R[i,j,k]=1 ("on" window = full window).
+        np.array of size (nfreq, npointings,nscans) containing fraction of time chunk (defines pulse window). For continuum sources, R[i,j,k]=1 ("on" window = full window).
         Upper layer should ensure that this is less than 1 and is of size ixjxk.
     
     calc_results :
@@ -156,10 +156,10 @@ def crosscorr_core(
         the DM with which we de-smear the data before the final gating. for continuum sources, set dispersion measure to 0.
     
     index_A :
-        where telescope A corresponds to in calc_results: CL: ideally, you should figure out the telescope index from the BBData object.
+        where telescope A corresponds to in calc_results; passed in by CorrJob.
     
     index_B :
-        where telescope B corresponds to in calc_results: CL: ideally, you should figure out the telescope index from the BBData object.
+        where telescope B corresponds to in calc_results; passed in by CorrJob.
     
     max_lag :
         maximum (absolute value) lag (in frames) for correlations (useful for very long time series data)
@@ -195,7 +195,7 @@ def crosscorr_core(
     f0 = bbdata_b.index_map["freq"]["centre"] #shape is (nfreq)
     for kkpointing in range(n_pointings):
         for jjscan in range(n_scan):
-            wij=window[jjscan,kkpointing]
+            wij=window[kkpointing,jjscan]
             t_a_indices = t_a[:, jjscan,kkpointing]  # array of length 1024
             t0_a = bbdata_a["time0"]["ctime"][:]
             t0_a_offset=bbdata_a["time0"]["ctime_offset"][:]+ t_a_indices * (sample_rate*1e-6)  # array of length 1024
