@@ -39,8 +39,8 @@ def test_corr_job_runs_filled():
     nstation, nfreq, npointing, ntime = (2, 1024, 1, 10 + 8)
     assert t.shape == (nstation, nfreq, npointing, ntime)
     assert (np.abs(t[0,:,0,0] - chime_bbdata['time0']['ctime'][:]) < FLOAT64_PRECISION).all(), "Expected start times to start at the BBData edge for the reference station"
-    assert w.shape == (nstation, nfreq, npointing, ntime)
-    assert r.shape == (nstation, nfreq, npointing, ntime)
+    assert w.shape == (nfreq, npointing, ntime)
+    assert r.shape == (nfreq, npointing, ntime)
 
 def test_corr_job_runs_no_fill():
     """Same as the above, but no fill_waterfall"""
@@ -71,5 +71,5 @@ def test_corr_job_runs_no_fill():
     freqs_present_kko = out_bbdata.index_map['freq']['id'][:]
     assert t.shape == (nstation, nfreq, npointing, ntime)
     assert (np.abs(t[0,freqs_present_chime,0,0] - chime_bbdata['time0']['ctime'][:]) < FLOAT64_PRECISION).all(), "Expected start times to start at the BBData edge for the reference station"
-    assert w.shape == (nstation, nfreq, npointing, ntime)
-    assert r.shape == (nstation, nfreq, npointing, ntime)
+    assert w.shape == (nfreq, npointing, ntime)
+    assert r.shape == (nfreq, npointing, ntime)
