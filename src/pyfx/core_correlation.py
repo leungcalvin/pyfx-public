@@ -22,7 +22,8 @@ def autocorr_core(
     window: np.ndarray,
     R: np.ndarray,
     max_lag: int,
-    n_pol: int=2
+    n_pol: int=2,
+    zp: bool=True
     ) -> np.ndarray:
     """Auto-correlates data and downselects over lag
     Inputs:
