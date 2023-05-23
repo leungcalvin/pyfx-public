@@ -557,10 +557,10 @@ class CorrJob:
         for iia in range(len(self.tel_names)):
             bbdata_a = BBData.from_file(self.bbdata_filepaths[iia])
             fill_waterfall(bbdata_a, write = True)
-            indices_a = np.round((t_ij[iia] - bbdata_a['time0']['ctime'][:,None,None]) / 2.56e-6).astype(int)
-            # there are scans with missing data...
-            mask_a = (indices_a < 0) + (indices_a > bbdata_a.ntime) 
-            indices_a %= bbdata_a.ntime
+            indices_a = np.round((t_ij[iia] - bbdata_a['time0']['ctime'][:,None,None]) / 2.56e-6).astype(int) # shape is (nfreq, npointing, nscan)
+            # there are scans with missing data: check the start and end index
+            mask_a = (indices_a < 0) + (indices_a  + w_ij[None,:,:] > bbdata_a.ntime) 
+            indices_a[mask_a] = int(bbdata_a.ntime // 2)
             # ...but we just let the correlator correlate
             auto_vis = autocorr_core(dm, bbdata_a, 
                                     t_a = indices_a,

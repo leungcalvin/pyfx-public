@@ -68,15 +68,22 @@ def autocorr_core(
             a_shape = list(bbdata_a['tiedbeam_baseband'][:,kkpointing:kkpointing+n_pol,:].shape)
             a_shape[-1] = wij
             clipped_a = np.zeros(a_shape, dtype=bbdata_a['tiedbeam_baseband'].dtype)
-            if len(np.unique(t_a_indices))==1:
+            if len(np.unique(t_a_indices))==1 and not zp:
                 # go fast
                 clipped_a[:, ...] = bbdata_a['tiedbeam_baseband'][:,kkpointing:kkpointing+n_pol,
                                                                 t_a_indices[0]:t_a_indices[0] + wij]
-            else:
+            elif len(np.unique(t_a_indices)) > 1 and not zp:
                 # go slower
                 for i in range(len(t_a_indices)):
                     clipped_a[i, ...] = bbdata_a['tiedbeam_baseband'][i,kkpointing:kkpointing+n_pol,
                                                                     t_a_indices[i]:t_a_indices[i] + wij]
+            elif zp:
+                for i in range(len(t_a_indices)):
+                    for j in range(n_pol):
+                        clipped_a[i, j, :] = getitem_zp1d(bbdata_a['tiedbeam_baseband'][i,2*kkpointing + j],
+                                                                    t_a_indices[i],
+                                                                    t_a_indices[i] + wij)
+                
             ######### intrachannel de-dispersion ##################
             scan_a_cd = intrachannel_dedisp(clipped_a, DM, f0=f0)
             r_jjscan=R[:,kkpointing,jjscan] #np array of size (nfreq)
@@ -126,7 +133,8 @@ def crosscorr_core(
     complex_conjugate_convention: int=-1,
     intra_channel_sign: int=1,
     fast: bool=True,
-    weight: Optional[np.ndarray]=None
+    weight: Optional[np.ndarray]=None,
+    zp: bool=True
     ) -> np.ndarray:
     """Fringestops, coherently dedisperses, and cross correlates data 
     Inputs:
@@ -243,7 +251,7 @@ def crosscorr_core(
             scan_a, scan_b_fs = get_aligned_scans(
                 bbdata_a, bbdata_b, t_a_indices, wij, geodelays,
                 complex_conjugate_convention=complex_conjugate_convention, intra_channel_sign=intra_channel_sign, sample_rate=sample_rate,
-                npointing=kkpointing,n_pol=n_pol
+                npointing=kkpointing,n_pol=n_pol,zp=zp
             )
 
             #######################################################
@@ -291,6 +299,51 @@ def crosscorr_core(
 
     return cross_vis
 
+def getitem_zp1d(arr,start_want,stop_want):
+    """Acts like arr[start_want:stop_want] but assumes start is strictly less than stop.
+
+    It returns output with the properties that 
+        1) width = stop_want - start_want 
+        2) as if bbdata were zero-padded on the left and right to negative and positive infinity.
+
+    Of course, no zero-padding actually takes place, to save memory. We implement this with casework:
+
+    All out: stop_want < start_have OR stop_have < start_want
+        We return all zeros
+    Half in, data late: start_want < start_have < stop_want < stop_have 
+        We zero-pad at the start of the output.
+    Half in, data early: start_have < start_want < stop_have < stop_want 
+        We zero-pad at the end of the output
+    All in : start_have < start_want < stop_want < stop_have -- easy peasy.
+    
+    TODO: make this work over a given axis of an arbitrary np.ndarray
+    """
+    width = stop_want - start_want
+    assert width >= 0, "Negative scan length not allowed; check your w_ij"
+    out = np.zeros(dtype = arr.dtype,shape = (width,))
+    start_have = 0
+    stop_have = arr.size
+    if stop_want < start_have or stop_have < start_want:
+        return out
+    if start_want < start_have <= stop_want <= stop_have:
+        nzeros = start_have - start_want # zero-pad at beginning of output array
+        print(nzeros)
+        samples_present = width - nzeros 
+        print(samples_present)
+        out[nzeros : nzeros + samples_present] = arr[0:samples_present]
+        return out
+    if start_have <= start_want <= stop_have < stop_want:
+        nzeros = stop_want - stop_have # zero-pad at end of output array
+        out[0 : width - nzeros] = arr[start_want:stop_have]
+        return out
+    if start_want <= start_have < stop_have <= stop_want:
+        nzeros = start_have - start_want
+        samples_present = stop_have - start_have
+        out[nzeros : nzeros + samples_present] = arr
+        return out
+    else:
+        return arr[start_want:stop_want]
+
 def get_aligned_scans(
     bbdata_a: BBData, 
     bbdata_b: BBData, 
@@ -301,7 +354,8 @@ def get_aligned_scans(
     intra_channel_sign: int=1, 
     sample_rate: float =2.56,
     npointing:int=0,
-    n_pol:int=2
+    n_pol:int=2,
+    zp:bool=True
     ) -> Tuple[np.ndarray,np.ndarray]:
     """For a single frequency corresponding to a given FPGA freq_id, returns aligned scans of data for that freq_id out of two provided BBData objects.
     Inputs:
@@ -346,18 +400,22 @@ def get_aligned_scans(
 
     aligned_a = np.zeros(a_shape, dtype=bbdata_a['tiedbeam_baseband'].dtype)
     # TODO vectorize
-    if len(np.unique(t_a_index))==1:
+    if len(np.unique(t_a_index))==1 and not zp:
         aligned_a[:, ...] = bbdata_a['tiedbeam_baseband'][:,npointing:npointing+n_pol,
                                                           t_a_index[0]:t_a_index[0] + wij]
-    else:
+
+    elif len(np.unique(t_a_index)) > 1 and not zp:
         for i in range(len(t_a_index)):
             aligned_a[i, ...] = bbdata_a['tiedbeam_baseband'][i,npointing:npointing+n_pol,
                                                             t_a_index[i]:t_a_index[i] + wij]
-
+    elif zp:
+        for i in range(len(t_a_index)):
+            for j in range(n_pol):
+                aligned_a[i,j,:] = getitem_zp1d(bbdata_a['tiedbeam_baseband'][i,j,:],t_a_index[i],t_a_index[i] + wij)
     # aligned_a = bbdata_a['tiedbeam_baseband'][freq_id,...,t_a_index:t_a_index + wij]
     # initialize aligned B array
-    aligned_b = np.zeros(
-        bbdata_b['tiedbeam_baseband'][:,npointing:npointing+n_pol,:].shape, dtype=bbdata_b['tiedbeam_baseband'].dtype)
+    aligned_b = np.zeros_like(aligned_a)
+        
     # calculate the additional offset between A and B in the event that the (samples points of) A and B are misaligned in absolute time by < 1 frame
     # i.e. to correctly fringestop, we must also account for a case such as:
     ## A:    |----|----|----|----|----| ##
@@ -380,29 +438,34 @@ def get_aligned_scans(
     # frame number closest to start time
     start_index_we_want_at_b = t_a_index+int_delay
 
-    # account for case where t_a_index+geodelay < 0 (i.e. signal arrives at telescope B before start of data acquision)
-    start_index_we_have_at_b = np.array(
-        [np.max([start, 0]) for start in start_index_we_want_at_b])
-    # if index_we_have_at_b is negative, this will be the amount we need to cushion our output data by
-    pad_index_b = start_index_we_have_at_b-start_index_we_want_at_b
-    # TODO vectorize -- for pad, start in zip(pad_index_b, start_index_we_have_at_b)] is slow
-    w_pad = wij - pad_index_b
-    ntime_start = bbdata_b.ntime - start_index_we_have_at_b
-    new_wij = np.minimum(w_pad, ntime_start)
-    new_wij = np.array([np.min([wij-pad, bbdata_b.ntime-start])
-                        for pad, start in zip(pad_index_b, start_index_we_have_at_b)])
-    # if you are missing half the data, multiply by 2.
-    
-    correction_factor =wij / new_wij
-    if correction_factor.any() > 2:
-        # warn the user that the boundary conditions are sketch if we are missing e.g. more than half the data.
-        print("warning: based on specified start time and scan length, over half the data is missing from telescope XX.")
+    if not zp:
+        # account for case where t_a_index+geodelay < 0 (i.e. signal arrives at telescope B before start of data acquision)
+        start_index_we_have_at_b = np.array(
+            [np.max([start, 0]) for start in start_index_we_want_at_b])
+        # if index_we_have_at_b is negative, this will be the amount we need to cushion our output data by
+        pad_index_b = start_index_we_have_at_b-start_index_we_want_at_b
+        # TODO vectorize -- for pad, start in zip(pad_index_b, start_index_we_have_at_b)] is slow
+        w_pad = wij - pad_index_b
+        ntime_start = bbdata_b.ntime - start_index_we_have_at_b
+        new_wij = np.minimum(w_pad, ntime_start)
+        new_wij = np.array([np.min([wij-pad, bbdata_b.ntime-start])
+                            for pad, start in zip(pad_index_b, start_index_we_have_at_b)])
+        # if you are missing half the data, multiply by 2.
+        
+        correction_factor =wij / new_wij
+        if correction_factor.any() > 2:
+            # warn the user that the boundary conditions are sketch if we are missing e.g. more than half the data.
+            print("warning: based on specified start time and scan length, over half the data is missing from telescope XX.")
 
-    for i in range(len(pad_index_b)):
-        aligned_b[i, ..., pad_index_b[i]:pad_index_b[i]+new_wij[i]] = \
-            bbdata_b['tiedbeam_baseband'][i, ...,start_index_we_have_at_b[i]:start_index_we_have_at_b[i]+new_wij[i]] * correction_factor[i]
-    # multiply by the correction factor to ensure that a continuum source, when correlated, has the correct flux corresponding to the desired w_ij, even when we run out of data.
-    aligned_b = aligned_b[..., :wij]
+        for i in range(len(pad_index_b)):
+            aligned_b[i, ..., pad_index_b[i]:pad_index_b[i]+new_wij[i]] = \
+                bbdata_b['tiedbeam_baseband'][i, ...,start_index_we_have_at_b[i]:start_index_we_have_at_b[i]+new_wij[i]] * correction_factor[i]
+        # multiply by the correction factor to ensure that a continuum source, when correlated, has the correct flux corresponding to the desired w_ij, even when we run out of data.
+        aligned_b = aligned_b[..., :wij]
+    elif zp:
+        for i in range(len(t_a_index)):
+            for j in range(n_pol):
+                aligned_b[i,j,:] = getitem_zp1d(bbdata_b['tiedbeam_baseband'][i,j,:],start_index_we_want_at_b[i],start_index_we_want_at_b[i] + wij)
 
     time_we_have_at_b = (delta_A_B+int_delay*sample_rate*1e-6)  # s
     sub_frame_tau = np.array([tau[i, :wij] - time_b*1e6 for time_b, i in zip(

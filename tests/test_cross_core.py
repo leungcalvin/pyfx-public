@@ -237,7 +237,11 @@ def test_pulsar():
     weight=np.ones((1024,1,1,(pulse_lim_high+pulse_lim_low)))
     cross=crosscorr_core(bbdata_a=chime_bbdata, bbdata_b=out_bbdata, t_a=t_a, window=window, R=R, calc_results=calcresults,DM=DM,
                         index_A=1, index_B=0,sample_rate=2.56,max_lag=max_lag,n_pol=2,
-                        weight=weight,fast=False)
+                        weight=weight,fast=False,zp=False) # zp=False is legacy behavior; TODO: remove
+    cross_zp=crosscorr_core(bbdata_a=chime_bbdata, bbdata_b=out_bbdata, t_a=t_a, window=window, R=R, calc_results=calcresults,DM=DM,
+                        index_A=1, index_B=0,sample_rate=2.56,max_lag=max_lag,n_pol=2,
+                        weight=weight,fast=False,zp=True)
+    assert np.isclose(cross,cross_zp).all(),'zp does not work :('
 
     ### rfi flagging
     cutoff_00=np.median(np.median(np.abs(cross[:,0,0,0,:,0])**2,axis=-1))+1*scipy.stats.median_abs_deviation(np.median(np.abs(cross[:,0,0,0,:,0])**2,axis=-1))
