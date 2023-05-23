@@ -612,7 +612,7 @@ class CorrJob:
                 del bbdata_b # free up space in memory
             del bbdata_a
 
-        if out_h5_file is not False:
+        if type(out_h5_file) is str:
             output.save(out_h5_file)
         return output
 

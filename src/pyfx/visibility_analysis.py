@@ -22,6 +22,8 @@ def extract_subframe_delay(
     rhosf : The grid of cross-correlation values.
 
     """
+    print('This implementation is just for convenience.'
+    print('You should really be using coda.delay.coarse_delay instead for data analysis')
     x = fftfreq(n=2**15) * 2.56
     data[np.isnan(data)] = 0
     rhosf = np.abs(ifft(data, n=2**15, axis=axis))

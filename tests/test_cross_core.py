@@ -61,7 +61,7 @@ def test_autocorr_sim():
     npol=2
     nscan=1
     npointing=1
-    t_a=np.random.randint(0,10,size=(nfreq,nscan,npointing))*0+10
+    t_a=np.random.randint(0,10,size=(nfreq,npointing,nscan))*0+10
     data=(np.random.uniform(-5e6,5e6,(nfreq,npol*npointing,ntime))+1j*np.random.uniform(-5e6,5e6,(nfreq,npol*npointing,ntime)))*0
     amplitude_00=8+0j
     amplitude_11=50+0j
@@ -70,20 +70,18 @@ def test_autocorr_sim():
             data[iifreq,scan*2,t_a[iifreq,scan]+1]=2+2j #peakval 8
             data[iifreq,scan*2+1,t_a[iifreq,scan]+1]=5+5j #peakval 50
     bbdata_a=VeryBasicBBData(freq_ids=freq_ids_present,data=data)
-    R=np.ones((nfreq,nscan,npointing))
+    R=np.ones((nfreq,npointing,nscan))
     max_lag=10
-    window=np.ones((nscan,npointing))*40
-    vectorized_autocorr=autocorr_core(DM = 1.2,bbdata_a=bbdata_a, t_a=t_a,window=window,R=R,max_lag=max_lag)
+    window=np.ones((npointing, nscan))*40
+    vectorized_autocorr=autocorr_core(DM = 1.2,bbdata_a=bbdata_a, t_a=t_a,window=window,R=R,max_lag=max_lag,zp=False)
     assert np.isclose(vectorized_autocorr[...,:,0,0,0,0],amplitude_00).all()
     assert np.isclose(vectorized_autocorr[...,:,1,1,0,0],amplitude_11).all()
+    
+    vectorized_autocorr_zp=autocorr_core(DM = 1.2,bbdata_a=bbdata_a, t_a=t_a,window=window,R=R,max_lag=max_lag,zp=True)
+    assert np.isclose(vectorized_autocorr,vectorized_autocorr_zp).all(),"autocorr zp does not work"
 
-
-"""
-def test_crosscorr_sim():
-    #tests whether output of crosscorr makes sense given "simulated" input data
-"""
 def test_continuum_calibrator():
-    #tests whether cross correlation of a continuum source yields expected results based on real data
+    """Tests whether cross correlation of a continuum source yields expected results based on real data"""
     telescopes = [chime,kko]
     chime_file='/home/calvin/public/astro_256150292_multibeam_LOFAR_L725386_24.2440833_47.8580556_chime.h5'
     kko_file='/home/calvin/public/astro_256150292_multibeam_LOFAR_L725386_24.2440833_47.8580556_kko.h5'
@@ -131,13 +129,12 @@ def test_continuum_calibrator():
     nscan=1
     npointing=1
     max_lag=100
-    t_a=np.zeros((1024,nscan,npointing),int)
-    R=np.ones((1024,nscan,npointing),int)
-    window=np.ones((nscan,npointing),int)
+    t_a=np.zeros((1024,npointing,nscan),int)
+    R=np.ones((1024,npointing,nscan),int)
+    window=np.ones((npointing,nscan),int)
 
     ntime=len(chime_bbdata["tiedbeam_baseband"][nscan][0])
-    for nscan in range(nscan):
-        window[nscan]*=ntime  # set to 1000 for smaller test, max 43670
+    window *= ntime  # set to 1000 for smaller test, max 43670
     
     weight=np.ones((1024,1,1,ntime))
     cross=crosscorr_core(bbdata_a=chime_bbdata, bbdata_b=out_bbdata, t_a=t_a, window=window, R=R, calc_results=calcresults,DM=0,
@@ -228,11 +225,11 @@ def test_pulsar():
     peak_bin=37820
     pulse_lim_low=6000
     pulse_lim_high=6000
-    t_a=np.ones((1024,nscan,npointing),int)
+    t_a=np.ones((1024,npointing,nscan),int)
     t_a=t_a*(peak_bin-pulse_lim_low)
-    R=np.ones((1024,nscan,npointing),int)
+    R=np.ones((1024,npointing,nscan),int)
 
-    window=np.ones((nscan,npointing),int)
+    window=np.ones((npointing,nscan),int)
     window*=(pulse_lim_high+pulse_lim_low)
     weight=np.ones((1024,1,1,(pulse_lim_high+pulse_lim_low)))
     cross=crosscorr_core(bbdata_a=chime_bbdata, bbdata_b=out_bbdata, t_a=t_a, window=window, R=R, calc_results=calcresults,DM=DM,

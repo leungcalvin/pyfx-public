@@ -6,8 +6,8 @@ from baseband_analysis.core.sampling import fill_waterfall
 
 from pyfx import corr_job
 
-chime_file='/home/calvin/public/singlebeam_NCP_chime.h5'
-kko_file='/home/calvin/public/singlebeam_255860695_NCP_kko.h5'
+chime_file='/home/calvin/public/astro_256150292_multibeam_LOFAR_L725386_24.2440833_47.8580556_chime.h5'
+kko_file='/home/calvin/public/astro_256150292_multibeam_LOFAR_L725386_24.2440833_47.8580556_kko.h5'
 FLOAT64_PRECISION = 2 * 2**-22 #our times should be this good: https://www.leebutterman.com/2021/02/01/store-your-unix-epoch-times-as-float64.html
 
 def test_corr_job_runs_filled():

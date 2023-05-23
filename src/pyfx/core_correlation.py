@@ -25,32 +25,35 @@ def autocorr_core(
     n_pol: int=2,
     zp: bool=True
     ) -> np.ndarray:
-    """Auto-correlates data and downselects over lag
-    Inputs:
-    -------
-    DM :
-        the DM with which we de-smear the data before the final gating. for continuum sources, set dispersion measure to 0.
+    """Auto-correlates data and downselects over lag.
 
-    bbdata_a :
-        baseband data. Needs to have "tiedbeam_baseband" data of size (nfreq,npointing*npol.ntime)
+    Parameters
+    ----------
+    DM : float
+        The DM with which the zeroth pointing of the data is de-smeared before the final gating. for continuum sources, set dispersion measure to 0.
+
+    bbdata_a : BBData object
+        At bare minimum, needs to have "tiedbeam_baseband" data of size (nfreq, npointing*npol, ntime).
     
-    t_a[i,j,k] :
-        start times at ith frequency, for jth time chunk, kth pointing for telescope A. Upper layer should ensure that this is of size (nfreq,nscan). 
+    t_a : np.ndarray of int of shape (nfreq, npointing, nscan).    
+        start index of the integration, relative to bbdata_a['time0']['ctime'] in units of 2.56 microsec, as a function of frequency channels, pointing index, and time in units of :window: (i.e. scan number).
     
-    window[j,k] :
-        integer or np.array of size (npointing,nscan) holding length of time chunk window in frames. Upper layer should assert that this is of size (nscan).
+    window : np.ndarray of int of shape (npointing, nscan).
+        duration of the scan, in units of 2.56 microsec, as a function of pointing and time (i.e. scan number).
     
-    R[i,j,k] :
-        float or np.array of size (nfreq,nscan,npointing). zFraction of time chunk (defines pulse window). Upper layer should ensure that this is less than 1, and that this is of size nxm.
+    R : np.ndarray of float of shape (nfreq, npointing, nscan).
+        Fraction R <= 1 of the scan, that gets down-selected before integration. In other words, we integrate between t_a + window // 2 +- r * window / 2
     
-    max_lag :
-        maximum (absolute value) lag (in frames) for auto-correlation (useful for very long time series data). Outer layer of the code should check that this is less than 1/2 of the window size times R[i,j]. 
+    max_lag : int
+        maximum (absolute value) lag (in frames) for auto-correlation (useful for very long time series data). TODO: Outer layer of the code should check that this is less than 1/2 of the window size times R.
+        set this to 20 for a good balance between space efficiency and good noise statistics.
     
-    n_pol :
-        number of polarizations in data
-    Outputs:
+    n_pol : int
+        number of polarizations in data -- always 2.
+
+    Returns
     -------
-    auto_vis - array of autocorrelations with shape (nfreq, npointing, npol, npol, nlag, nscan)
+    auto_vis - array of autocorrelations with shape (nfreq, npointing, npol, npol, 2 * nlag + 1, nscan)
 
     """
     n_freq = bbdata_a.nfreq
@@ -138,40 +141,39 @@ def crosscorr_core(
     zp: bool=True
     ) -> np.ndarray:
     """Fringestops, coherently dedisperses, and cross correlates data 
-    Inputs:
-    -------
-    bbdata_a : 
-        telescope A baseband data 
-    
+    Parameters
+    ----------
+    bbdata_a : BBData object
+        At bare minimum, needs to have "tiedbeam_baseband" data of size (nfreq, npointing*npol, ntime).
     bbdata_b : 
-        telescope B baseband data. Data must be "well-ordered" in frequency (iifreqA=iifreqB). Frequency centers must also be in Mhz. 
+        telescope B baseband data. Data must have matching index_map['freq'] as bbdata_a. index_map['freq']['centre'] must also be in MHz.
+    t_a : np.ndarray of int of shape (nfreq, npointing, nscan).    
+        start index of the integration, relative to bbdata_a['time0']['ctime'] in units of 2.56 microsec, as a function of frequency channels, pointing index, and time in units of :window: (i.e. scan number).
     
-    t_a[i,j,k] :
-        array of integers corresponding to start frames at ith frequency, for jth time chunk, kth pointing for telescope A. 
-        Upper layer should ensure that this is of size ixjxk and contains integers. 
+    window : np.ndarray of int of shape (npointing, nscan).
+        duration of the scan, in units of 2.56 microsec, as a function of pointing and time (i.e. scan number).
     
-    window[j,k] : 
-        np.array of size (npointings,nscans) containing integer numbers, each element is the length of scan window in frames.
-        Upper layer should ensure that this is of size jxk, contains integers. 
+    R : np.ndarray of float of shape (nfreq, npointing, nscan).
+        Fraction R <= 1 of the scan, that gets down-selected before integration. In other words, we integrate between t_a + window // 2 +- r * window / 2
     
-    R[i,j,k] :
-        np.array of size (nfreq, npointings,nscans) containing fraction of time chunk (defines pulse window). For continuum sources, R[i,j,k]=1 ("on" window = full window).
-        Upper layer should ensure that this is less than 1 and is of size ixjxk.
+    DM : float
+        The DM with which the zeroth pointing of the data is de-smeared before the final gating. for continuum sources, set dispersion measure to 0.
+    
+    max_lag : int
+        maximum (absolute value) lag (in frames) for auto-correlation (useful for very long time series data). TODO: Outer layer of the code should check that this is less than 1/2 of the window size times R.
+        set this to 20 for a good balance between space efficiency and good noise statistics.
+    
+    n_pol : int
+        number of polarizations in data -- always 2.
     
     calc_results :
         difxcalc-wrapper IMReader object, which is used to calculate geometric delays
     
-    DM :
-        the DM with which we de-smear the data before the final gating. for continuum sources, set dispersion measure to 0.
-    
     index_A :
-        where telescope A corresponds to in calc_results; passed in by CorrJob.
+        where telescope A corresponds to in calc_results.
     
     index_B :
-        where telescope B corresponds to in calc_results; passed in by CorrJob.
-    
-    max_lag :
-        maximum (absolute value) lag (in frames) for correlations (useful for very long time series data)
+        where telescope B corresponds to in calc_results.
     
     sample_rate :
         rate at which data is sampled in microseconds
@@ -387,7 +389,8 @@ def get_aligned_scans(
     aligned_b : np.array
         A dual-pol scan of shape (2,w_ij)
 
-    Super technical note on floor vs round: it doesn't matter AS LONG AS you do a sub-sample rotation (or better yet, a frac samp correction)! Suppose your total delay is 10.6 frames.
+    Technical remarks on delay compensation:
+    On floor vs round: it doesn't matter AS LONG AS you do a sub-sample rotation (or better yet, a frac samp correction)! Suppose your total delay is 10.6 frames.
     - You can round to 11 frames. You should keep track that you rounded to 11, and then do frac samp -0.4.
     - You can floor to 10 frames, you should keep track that you floored to 10, and then do frac samp +0.6.
 
