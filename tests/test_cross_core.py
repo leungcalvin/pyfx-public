@@ -358,8 +358,7 @@ def test_pulsar_2():
     assert peaklag_11 == 0
 
     delays, snrs = extract_subframe_delay(cross[:,0,:,:,:,0])
-    assert np.isclose(delays[0,0],-0.1296875,rtol=1e-05) #should be good to sub nanosecond
-    assert np.isclose(delays[1,1],-0.12898438,rtol=1e-05) #should be good to sub nanosecond
-    assert snrs[0,0]>=41
-    assert snrs[1,1]>=34
-
+    assert np.isclose(delays[0,0],-0.11257813,rtol=1e-05) #should be good to sub nanosecond
+    assert np.isclose(delays[1,1],-0.11148437,rtol=1e-05) #should be good to sub nanosecond
+    assert snrs[0,0]>=53
+    assert snrs[1,1]>=49
