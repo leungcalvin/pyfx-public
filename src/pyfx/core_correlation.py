@@ -207,7 +207,7 @@ def crosscorr_core(
     for kkpointing in range(n_pointings):
         for jjscan in range(n_scan):
             wij=window[kkpointing,jjscan]
-            t_a_indices = t_a[:, jjscan,kkpointing]  # array of length 1024
+            t_a_indices = t_a[:, kkpointing, jjscan]  # array of length 1024
             t0_a = bbdata_a["time0"]["ctime"][:]
             t0_a_offset=bbdata_a["time0"]["ctime_offset"][:]+ t_a_indices * (sample_rate*1e-6)  # array of length 1024
     
@@ -226,16 +226,11 @@ def crosscorr_core(
             # using telescope A times as reference time
             if fast==True:
                 delta_t=t0_a-t0_a[0]+t0_a_offset-t0_a_offset[0]
-                #dt_vals=(sample_rate * 1e-6 * (t_a_indices[:, np.newaxis] + 1 + np.arange(wij)))
                 dt_vals=(sample_rate * 1e-6 * (t_a_indices[:, np.newaxis] + 1 + np.arange(wij))+delta_t[:,np.newaxis])
-                #geodelays_flattened = calc_results.retarded_baseline_delay(
-                #    ant1=index_A, ant2=index_B, time=start_times, src=kkpointing, delay_sign=0, self_consistent=False,
-                #    dt=dt_vals
-                #)
                 geodelays_flattened = calc_results.baseline_delay(
-                    ant1=index_A, ant2=index_B, time=start_times, src=kkpointing,scan=jjscan,
+                    ant1=index_A, ant2=index_B, time=start_times, src=kkpointing,scan=0,
                     dt=dt_vals
-                )
+                ) # difxcalc scan number should be zero (is distinct from pyfx scan number)!
                 geodelays = geodelays_flattened.reshape(dt_vals.shape)
             else:
                 start_times = Time(
@@ -270,7 +265,7 @@ def crosscorr_core(
             #######################################################
             # Now that the pulses are centered at zero, calculate
             ### the start and stop time indices for on-signal ######
-            r_jjscan=R[:,jjscan,kkpointing] #np array of size (nfreq)
+            r_jjscan=R[:,kkpointing,jjscan] #np array of size (nfreq)
 
             if len(np.unique(r_jjscan))==1:
                 r_ij=r_jjscan[0]
@@ -330,9 +325,7 @@ def getitem_zp1d(arr,start_want,stop_want):
         return out
     if start_want < start_have <= stop_want <= stop_have:
         nzeros = start_have - start_want # zero-pad at beginning of output array
-        print(nzeros)
         samples_present = width - nzeros 
-        print(samples_present)
         out[nzeros : nzeros + samples_present] = arr[0:samples_present]
         return out
     if start_have <= start_want <= stop_have < stop_want:

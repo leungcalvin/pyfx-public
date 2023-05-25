@@ -506,8 +506,7 @@ class CorrJob:
         sww = _scrunch(wwfall,fscrunch = fscrunch, tscrunch = tscrunch)
         del wwfall
         f = plt.figure()
-        plt.imshow(sww[:,pointing] + sww[:,pointing+1],aspect = 'auto',vmin = -1,vmax = 3)
-        del bbdata_A
+        plt.imshow(sww[:,pointing] + sww[:,pointing+1],aspect = 'auto',vmin = -1,vmax = 3,interpolation = 'none')
 
         y = np.arange(1024)
         for iiscan in range(t.shape[-1]):
