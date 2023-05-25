@@ -520,14 +520,18 @@ class CorrJob:
                 linestyle = '-'
             else:
                 linestyle = '--'
-            plt.plot(x_start, y/fscrunch,linestyle = linestyle,color = 'black')
-            plt.plot(x_end, y/fscrunch,linestyle = linestyle,color = 'black')
+            plt.plot(x_start, y/fscrunch,linestyle = linestyle,color = 'black') # shade t
+            plt.plot(x_end, y/fscrunch,linestyle = linestyle,color = 'black') # shade t + w
+            plt.plot(x_rminus, y/fscrunch,linestyle = '-.',color = 'black') # shade t + w/2 - r/2
+            plt.plot(x_rplus, y/fscrunch,linestyle = '-.',color = 'black') # shade t + w/2 + r/2
+
         xmin = np.min(t[iiref,:,pointing,:] - bbdata_A['time0']['ctime'][:,None],axis = -1) / (2.56e-6 * tscrunch)
         xmax = np.max(t[iiref,:,pointing,:] - bbdata_A['time0']['ctime'][:,None],axis = -1) / (2.56e-6 * tscrunch)
+        del bbdata_A
 
         plt.xlim(np.median(xmin),np.median(xmax))
         plt.ylim(1024 / fscrunch,0)
-        plt.ylabel('Freq ID')
+        plt.ylabel(f'Freq ID (0-1023) / {fscrunch:0.0f}')
         plt.xlabel(f'Time ({tscrunch:0.1f} frames)')
         return f
 
@@ -561,6 +565,7 @@ class CorrJob:
             mask_a = (indices_a < 0) + (indices_a  + w_ij[None,:,:] > bbdata_a.ntime) 
             indices_a[mask_a] = int(bbdata_a.ntime // 2)
             # ...but we just let the correlator correlate
+            print(f'Calculating autos for station {iia}')
             auto_vis = autocorr_core(dm, bbdata_a, 
                                     t_a = indices_a,
                                     window = w_ij,
@@ -583,10 +588,13 @@ class CorrJob:
                 auto = auto_vis,
                 integration_time = int_time,
                 )
+            print(f'Wrote autos for station {iia}')
 
             for iib in range(iia+1,len(self.tel_names)):
+                print(f'Loading BBData for station {iib}')
                 bbdata_b = BBData.from_file(self.bbdata_filepaths[iib])
                 fill_waterfall(bbdata_b, write = True)
+                print(f'Calculating visibilities for baseline {iia}-{iib}')
                 vis = crosscorr_core(
                         bbdata_a, 
                         bbdata_b, 
@@ -608,11 +616,13 @@ class CorrJob:
                         telescope_b = self.telescopes[iib],
                         cross = vis,
                     )
+                print(f'Wrote visibilities for baseline {iia}-{iib}')
                 del bbdata_b # free up space in memory
             del bbdata_a
 
         if type(out_h5_file) is str:
             output.save(out_h5_file)
+            print(f'Wrote visibilities to disk: ls -l {out_h5_file}')
         return output
 
     def run_correlator_job_one_freq_id(t_ij, w_ij, r_ij, dm, event_id = None,):
