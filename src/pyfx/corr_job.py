@@ -603,12 +603,14 @@ class CorrJob:
                         r_ij,
                         self.calcresults, 
                         DM = dm, 
-                        index_A = iia,
-                        index_B = iib,
+                        index_A = iib,
+                        index_B = iia,
                         max_lag = self.max_lag, 
                         complex_conjugate_convention = -1, 
-                        intra_channel_sign = 1
+                        intra_channel_sign = 1,
+                        fast = False,
                     )
+                print('WARNING: iia <--> iib swapped in crosscorr_core')
                 output._from_ndarray_baseline(
                         event_id = event_id,
                         pointing_center = pointing_centers,

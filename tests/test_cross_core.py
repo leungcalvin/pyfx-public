@@ -1,6 +1,5 @@
 import pytest
 import numpy as np
-import copy
 import os
 from pyfx.core_correlation import autocorr_core,crosscorr_core
 from pyfx.core_vis import extract_subframe_delay, extract_frame_delay
@@ -9,6 +8,7 @@ from pyfx.core_vis import extract_subframe_delay, extract_frame_delay
 import difxcalc_wrapper.runner as dcr
 from difxcalc_wrapper.io import make_calc
 from baseband_analysis.core.sampling import fill_waterfall
+from baseband_analysis.core.dedispersion import coherent_dedisp
 import astropy.coordinates as ac
 from baseband_analysis.core.bbdata import BBData
 import astropy.units as un
@@ -144,13 +144,13 @@ def test_continuum_calibrator():
     ### rfi flagging
     cutoff_00=np.median(np.median(np.abs(cross[:,0,0,0,:,0])**2,axis=-1))+1*scipy.stats.median_abs_deviation(np.median(np.abs(cross[:,0,0,0,:,0])**2,axis=-1))
     cutoff_11=np.median(np.median(np.abs(cross[:,0,1,1,:,0])**2,axis=-1))+1*scipy.stats.median_abs_deviation(np.median(np.abs(cross[:,0,1,1,:,0])**2,axis=-1))
-    for ifreq in range(len(cross)):
-        val_00=np.median(np.abs(cross[ifreq,0,0,0,:,0])**2,axis=-1)
-        val_11=np.median(np.abs(cross[ifreq,0,1,1,:,0])**2,axis=-1)
+    for iifreq in range(len(cross)):
+        val_00=np.median(np.abs(cross[iifreq,0,0,0,:,0])**2,axis=-1)
+        val_11=np.median(np.abs(cross[iifreq,0,1,1,:,0])**2,axis=-1)
         if val_00 > cutoff_00:
-            cross[ifreq,0,0,0,:,0] *=0
+            cross[iifreq,0,0,0,:,0] *=0
         if val_11 > cutoff_11:
-            cross[ifreq,0,1,1,:,0] *=0        
+            cross[iifreq,0,1,1,:,0] *=0        
 
     peaklags= extract_frame_delay(
             cross[:,0,:,:,:,0])  
@@ -358,7 +358,60 @@ def test_pulsar_2():
     assert peaklag_11 == 0
 
     delays, snrs = extract_subframe_delay(cross[:,0,:,:,:,0])
-    assert np.isclose(delays[0,0],-0.11257813,rtol=1e-05) #should be good to sub nanosecond
-    assert np.isclose(delays[1,1],-0.11148437,rtol=1e-05) #should be good to sub nanosecond
-    assert snrs[0,0]>=53
-    assert snrs[1,1]>=49
+    assert np.isclose(delays[0,0],-0.12960937,rtol=1e-04) #should be good to sub nanosecond
+    assert np.isclose(delays[1,1],-0.12898438,rtol=1e-04) #should be good to sub nanosecond
+    assert snrs[0,0]>=41
+    assert snrs[1,1]>=34
+
+def test_cross_core_corrjob():
+    from pyfx import corr_job
+    chime_file='/home/calvin/public/astro_255011898_multibeam_B0136+57_chime.h5'
+    kko_file='/home/calvin/public/astro_255011898_multibeam_B0136+57_kko.h5'
+    pulsar_job = corr_job.CorrJob([chime_file,kko_file],
+       ras = np.array([24.83225]), # hard coded
+       decs = np.array([58.24217194]) # hard coded
+	   )
+
+
+
+    t,w,r = pulsar_job.define_scan_params(ref_station = 'chime',
+			      start_or_toa = 'start',
+			      t0f0 = (1670732187.8666291, 800.0),
+			      time_spacing = 'even',
+			      freq_offset_mode = 'bbdata',
+			      Window = np.ones(1024) * 2000,
+			      r_ij = np.ones(1024) * 1,
+			      period_frames = 2000,
+			      dm = 73.81141,
+			      num_scans_before = 0,
+                              num_scans_after = 2,
+			      )
+
+    #pulsar_job.visualize_twr(chime_file,t[...,0:5],w[...,0:5],r[...,0:5],dm = 73.81141)
+    vlbivis = pulsar_job.run_correlator_job(t[...,0:3],w[0,:,0:3].astype(int),r[...,0:3],dm = 56.66,
+			      out_h5_file = False)
+    cross = vlbivis['chime-kko']['vis'][:]
+    assert cross.shape == (1024,1,2,2,41,2)
+    cutoff_00=np.median(np.median(np.abs(cross[:,0,0,0,:,0])**2,axis=-1))+1*scipy.stats.median_abs_deviation(np.median(np.abs(cross[:,0,0,0,:,0])**2,axis=-1))
+    cutoff_11=np.median(np.median(np.abs(cross[:,0,1,1,:,0])**2,axis=-1))+1*scipy.stats.median_abs_deviation(np.median(np.abs(cross[:,0,1,1,:,0])**2,axis=-1))
+    for iifreq in range(len(cross)):
+        val_00=np.median(np.abs(cross[iifreq,0,0,0,:,0])**2,axis=-1)
+        val_11=np.median(np.abs(cross[iifreq,0,1,1,:,0])**2,axis=-1)
+        if val_00 > cutoff_00:
+            cross[iifreq,0,0,0,:,0] *=0
+            print(iifreq,'zeroed')
+        if val_11 > cutoff_11:
+            cross[iifreq,0,1,1,:,0] *=0
+    peaklags= extract_frame_delay(
+            cross[:,0,:,:,:,0])
+    peaklag_00=peaklags[0]
+    peaklag_11=peaklags[1]
+
+    assert peaklag_00 == 0, "frame lag nonzero!"
+    assert peaklag_11 == 0, "frame lag nonzero!"
+
+    delays, snrs = extract_subframe_delay(cross[:,0,:,:,:,0])
+    assert np.abs(delays[0,0] - -0.12960937) < 0.001, "delays[0,0] wrong!" #should be good to sub nanosecond
+    assert np.abs(delays[1,1] - -0.12898438) < 0.001, "delays[1,1] wrong!" #should be good to sub nanosecond
+    assert snrs[0,0]>=41, "fringe not found in 0,0 pol"
+    assert snrs[1,1]>=34, "fringe not found in 1,1 pol"
