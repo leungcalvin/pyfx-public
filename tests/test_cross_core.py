@@ -138,7 +138,7 @@ def test_continuum_calibrator():
     
     weight=np.ones((1024,1,1,ntime))
     cross=crosscorr_core(bbdata_a=chime_bbdata, bbdata_b=out_bbdata, t_a=t_a, window=window, R=R, calc_results=calcresults,DM=0,
-                        index_A=1, index_B=0,sample_rate=2.56,max_lag=max_lag,n_pol=2,
+                        index_A=0, index_B=1,sample_rate=2.56,max_lag=max_lag,n_pol=2,
                         weight=weight)
 
     ### rfi flagging
@@ -233,10 +233,10 @@ def test_pulsar():
     window*=(pulse_lim_high+pulse_lim_low)
     weight=np.ones((1024,1,1,(pulse_lim_high+pulse_lim_low)))
     cross=crosscorr_core(bbdata_a=chime_bbdata, bbdata_b=out_bbdata, t_a=t_a, window=window, R=R, calc_results=calcresults,DM=DM,
-                        index_A=1, index_B=0,sample_rate=2.56,max_lag=max_lag,n_pol=2,
+                        index_A=0, index_B=1,sample_rate=2.56,max_lag=max_lag,n_pol=2,
                         weight=weight,fast=False,zp=False) # zp=False is legacy behavior; TODO: remove
     cross_zp=crosscorr_core(bbdata_a=chime_bbdata, bbdata_b=out_bbdata, t_a=t_a, window=window, R=R, calc_results=calcresults,DM=DM,
-                        index_A=1, index_B=0,sample_rate=2.56,max_lag=max_lag,n_pol=2,
+                        index_A=0, index_B=1,sample_rate=2.56,max_lag=max_lag,n_pol=2,
                         weight=weight,fast=False,zp=True)
     assert np.isclose(cross,cross_zp).all(),'zp does not work :('
 
@@ -335,7 +335,7 @@ def test_pulsar_2():
     window*=(pulse_lim_high+pulse_lim_low)
     weight=np.ones((1024,1,1,(pulse_lim_high+pulse_lim_low)))
     cross=crosscorr_core(bbdata_a=chime_bbdata, bbdata_b=out_bbdata, t_a=t_a, window=window, R=R, calc_results=calcresults,DM=DM,
-                        index_A=1, index_B=0,sample_rate=2.56,max_lag=max_lag,n_pol=2,
+                        index_A=0, index_B=1,sample_rate=2.56,max_lag=max_lag,n_pol=2,
                         weight=weight,fast=False)
 
     ### rfi flagging
@@ -388,10 +388,10 @@ def test_cross_core_corrjob():
 			      )
 
     #pulsar_job.visualize_twr(chime_file,t[...,0:5],w[...,0:5],r[...,0:5],dm = 73.81141)
-    vlbivis = pulsar_job.run_correlator_job(t[...,0:3],w[0,:,0:3].astype(int),r[...,0:3],dm = 56.66,
+    vlbivis = pulsar_job.run_correlator_job(t[...,0:3],w[0,:,0:3].astype(int),r[...,0:3],dm = 73.81141,
 			      out_h5_file = False)
     cross = vlbivis['chime-kko']['vis'][:]
-    assert cross.shape == (1024,1,2,2,41,2)
+    assert cross.shape == (1024,1,2,2,41,3)
     cutoff_00=np.median(np.median(np.abs(cross[:,0,0,0,:,0])**2,axis=-1))+1*scipy.stats.median_abs_deviation(np.median(np.abs(cross[:,0,0,0,:,0])**2,axis=-1))
     cutoff_11=np.median(np.median(np.abs(cross[:,0,1,1,:,0])**2,axis=-1))+1*scipy.stats.median_abs_deviation(np.median(np.abs(cross[:,0,1,1,:,0])**2,axis=-1))
     for iifreq in range(len(cross)):

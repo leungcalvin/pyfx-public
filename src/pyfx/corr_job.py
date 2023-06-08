@@ -83,7 +83,7 @@ def _ti0_even_spacing(bbdata_filename, ti0,  period_frames, num_scans_before = 0
         end_time = start_time + 2.56e-6 * bbdata.ntime
         num_scans_per_freq = (end_time - ti0) // (2.56e-6 * period_frames)
         num_scans_after = np.max(num_scans_per_freq) - 1 # minus one, since "num_scans_after" does not include the scan starting at ti0.
-    scan_numbers = np.hstack((np.arange(0,num_scans_after),
+    scan_numbers = np.hstack((np.arange(0,num_scans_after + 1),
                               np.arange(-num_scans_before,0))
                             ) 
     # this makes the scan number corresponding to ti0 come first in the array: e.g. if the on-pulse comes in the 5th scan period, the t_ij array is ordered as (5,6,7,...0,1,2,3,4)
@@ -152,7 +152,7 @@ def validate_wij(w_ij, t_ij, r_ij, dm=None):
     # overlapping sub-integrations: 
     sub_scan_start = t_ij + 2.56e-6 * (w_ij // 2 - (w_ij * r_ij / 2))
     sub_scan_end = t_ij + 2.56e-6 * (w_ij // 2 + (w_ij * r_ij / 2))
-    assert (sub_scan_end[:,:,:,iisort][:,:,:,0:-1] <= sub_scan_start[:,:,:,iisort][:,:,:,1:] + 2.56e-6).all(), "previous scan ends AFTER next one starts? you probably do not want this" # add 1 frame of buffer here to make this lenient
+    assert ((sub_scan_end[:,:,:,iisort][:,:,:,0:-1] - sub_scan_start[:,:,:,iisort][:,:,:,1:]) < w_ij[:,:,:-1][None] * 2.56e-6 * 0.01).all(), "next scan overlaps more than 1% with previous scan? you probably do not want this" 
     
     # no changing integer lags
     earth_rotation_time = 0.4125  # seconds https://www.wolframalpha.com/input?i=1.28+us+*+c+%2F+%28earth+rotation+speed+*+2%29
@@ -603,14 +603,14 @@ class CorrJob:
                         r_ij,
                         self.calcresults, 
                         DM = dm, 
-                        index_A = iib,
-                        index_B = iia,
+                        index_A = iia,
+                        index_B = iib,
                         max_lag = self.max_lag, 
                         complex_conjugate_convention = -1, 
                         intra_channel_sign = 1,
                         fast = False,
                     )
-                print('WARNING: iia <--> iib swapped in crosscorr_core')
+                #print('WARNING: iia <--> iib swapped in crosscorr_core')
                 output._from_ndarray_baseline(
                         event_id = event_id,
                         pointing_center = pointing_centers,
