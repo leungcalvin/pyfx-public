@@ -11,6 +11,9 @@ Natively supports frequency-dependent pulsar gates, and coherent dedispersion.
     python setup.py develop # one way, or...
     pip install -e . # ...another way, but editable
 ```
+
+You will also need `difxcalc-wrapper` and you probably will need `coda`. Use `main` branch for both; ensure that your `difxcalc-wrapper` and your `pyfx` installation are both newer (or both older) than June 7 2023; on that date, Calvin did a big sign flip throughout the whole stack (to correct for an earlier sign flip mistake from the dinosaur days).
+
 ## Usage
 You will want to set up a `CorrJob` to handle the correlation over all possible baselines. The `CorrJob` will specify the correlation start and stop times as a function of frequency, time, and pointing at a given reference station in three arrays of shape $(nfreq (fixed to 1024), npointing, ntime)$. In most cases you will have only one pointing, but for widefield VLBI you might want multiple pointings.
 1) $t$, a `float64`, which specifies topocentric Unix time 
