@@ -1,32 +1,7 @@
 """A module which holds bindings to mathematical operations. This module is meant to be used on *baseband* data"""
 import numpy as np
 from scipy.fft import fft, ifft, next_fast_len,fftfreq
-import torch
-import torch.fft as torch_fft
 import time
-
-def fft_corr_gpu(
-    w1: torch.Tensor, 
-    w2: torch.Tensor, 
-    axis=-1
- ) -> torch.Tensor:
-    """Correlates but vectorizes over all axes except the correlation axis (-1 by default).
-    Inputs:
-    -------
-    w1 : torch.Tensor
-    w2 : torch.Tensor
-
-    Outputs:
-    -------
-    out : torch.Tensor
-        w1 cross cross correlated with w2
-    """
-    assert axis==-1, "fft in pytorch is only supported along last axis of data"
-    x=torch_fft.fft(w1)
-    del(w1)
-    y=torch.conj(torch_fft.fft(w2))
-    del w2
-    return torch_fft.ifft(x*y)  
 
 # S.E.A.: note - scipy.fft is faster than np.fft. 
 # Scipy.fft is already optimized to the point where that implementing this in cython won't really speed things up; you need gpus (see core_math_torch.py)

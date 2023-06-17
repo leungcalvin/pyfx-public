@@ -1,8 +1,6 @@
 """A module which performs simple functions on visibilities. This module is meant to be used on *visibility* data"""
 import numpy as np
 from scipy.fft import fft, ifft, fftshift, next_fast_len, fftfreq
-import torch
-import torch.fft as torch_fft
 import time
 from scipy.stats import median_abs_deviation
 from typing import List, Tuple
