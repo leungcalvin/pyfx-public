@@ -201,7 +201,7 @@ def crosscorr_core(
     # SA: basing this off of how the data is arranged now, may want to change
     n_pointings = bbdata_a["tiedbeam_baseband"].shape[1] // n_pol
     n_freq_B=len(bbdata_b.freq)
-    assert n_freq_B==nfreq, f"There appear to be {n_freq} frequency channels in telescope A and {n_freq_B} frequency channels in telescope B. Please pass in these bbdata objects with frequency channels aligned (i.e. nth index along the frequency axis should correspond to the *same* channel in telescope A and B)"
+    assert n_freq_B==n_freq, f"There appear to be {n_freq} frequency channels in telescope A and {n_freq_B} frequency channels in telescope B. Please pass in these bbdata objects with frequency channels aligned (i.e. nth index along the frequency axis should correspond to the *same* channel in telescope A and B)"
 
     vis_shape = (n_freq, n_pointings, n_pol, n_pol, 2 * max_lag + 1,n_scan)
     cross_vis = np.zeros(vis_shape, dtype=bbdata_a['tiedbeam_baseband'].dtype)
