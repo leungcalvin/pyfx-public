@@ -200,10 +200,15 @@ def crosscorr_core(
     n_scan = np.size(t_a, axis=-1)
     # SA: basing this off of how the data is arranged now, may want to change
     n_pointings = bbdata_a["tiedbeam_baseband"].shape[1] // n_pol
+    n_freq_B=len(bbdata_b.freq)
+    assert n_freq_B==n_freq, f"There appear to be {n_freq} frequency channels in telescope A and {n_freq_B} frequency channels in telescope B. Please pass in these bbdata objects with frequency channels aligned (i.e. nth index along the frequency axis should correspond to the *same* channel in telescope A and B)"
 
     vis_shape = (n_freq, n_pointings, n_pol, n_pol, 2 * max_lag + 1,n_scan)
     cross_vis = np.zeros(vis_shape, dtype=bbdata_a['tiedbeam_baseband'].dtype)
-    f0 = bbdata_b.index_map["freq"]["centre"] #shape is (nfreq)
+    f0 = bbdata_a.index_map["freq"]["centre"] #shape is (nfreq)
+    f0_b = bbdata_b.index_map["freq"]["centre"] #shape is (nfreq)
+    #assert np.max(f0-f0_b)==0, f"The frequency channels in telescope A and telescope B seem to be misaligned. Please pass in these bbdata objects with frequency channels aligned (i.e. nth index along the frequency axis should correspond to the *same* channel in telescope A and B)"
+
     for kkpointing in range(n_pointings):
         for jjscan in range(n_scan):
             wij=window[kkpointing,jjscan]
