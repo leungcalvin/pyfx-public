@@ -136,7 +136,7 @@ def crosscorr_core(
     n_pol: int=2,
     complex_conjugate_convention: int=-1,
     intra_channel_sign: int=1,
-    fast: bool=True,
+    fast: bool=False,
     weight: Optional[np.ndarray]=None,
     zp: bool=True
     ) -> np.ndarray:
@@ -214,7 +214,7 @@ def crosscorr_core(
             wij=window[kkpointing,jjscan]
             t_a_indices = t_a[:, kkpointing, jjscan]  # array of length 1024
             t0_a = bbdata_a["time0"]["ctime"][:]
-            t0_a_offset=bbdata_a["time0"]["ctime_offset"][:]+ t_a_indices * (sample_rate*1e-6)  # array of length 1024
+            t0_a_offset=bbdata_a["time0"]["ctime_offset"][:] #+ t_a_indices * (sample_rate*1e-6)  # array of length 1024
     
             #start_times = Time(
             #    t0_a,
@@ -243,9 +243,10 @@ def crosscorr_core(
                     val2=t0_a_offset,
                     format="unix",
                     precision=9,
-                )
+                ) #these are the pure ctime start times from the data 
                 geodelays=np.zeros((1024,wij),dtype=float)
                 for i in range(n_freq):
+                    # the times we want to query for each frequency is an array of length wij times ranging from (ctime start times + t_a, ctime start times + t_a +w_ij)
                     query_times = start_times[i] + sample_rate*1e-6 * un.s * (t_a_indices[i]+np.arange(wij))
                     geodelays[i,:]=calc_results.baseline_delay(
                         ant1=index_A, ant2=index_B, time=query_times, src=kkpointing,scan=0)# difxcalc scan number should be zero (is distinct from pyfx scan number)!
