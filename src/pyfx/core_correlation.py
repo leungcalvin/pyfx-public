@@ -72,7 +72,7 @@ def autocorr_core(
             a_shape = list(bbdata_a['tiedbeam_baseband'][:,kkpointing:kkpointing+n_pol,:].shape)
             a_shape[-1] = wij
             clipped_a = np.zeros(a_shape, dtype=bbdata_a['tiedbeam_baseband'].dtype)
-            if len(np.unique(t_a_indices))==1 and not zp:
+            if len(np.uniqnue(t_a_indices))==1 and not zp:
                 # go fast
                 clipped_a[:, ...] = bbdata_a['tiedbeam_baseband'][:,kkpointing:kkpointing+n_pol,
                                                                 t_a_indices[0]:t_a_indices[0] + wij]
@@ -136,7 +136,7 @@ def crosscorr_core(
     n_pol: int=2,
     complex_conjugate_convention: int=-1,
     intra_channel_sign: int=1,
-    fast: bool=False,
+    fast: bool=True,
     weight: Optional[np.ndarray]=None,
     zp: bool=True
     ) -> np.ndarray:
@@ -214,30 +214,25 @@ def crosscorr_core(
             wij=window[kkpointing,jjscan]
             t_a_indices = t_a[:, kkpointing, jjscan]  # array of length 1024
             t0_a = bbdata_a["time0"]["ctime"][:]
-            t0_a_offset=bbdata_a["time0"]["ctime_offset"][:] #+ t_a_indices * (sample_rate*1e-6)  # array of length 1024
     
-            #start_times = Time(
-            #    t0_a,
-            #    val2=t0_a_offset,
-            #    format="unix",
-            #    precision=9,
-            #)
-            start_times = Time(
-                t0_a[0],
-                val2=t0_a_offset[0],
-                format="unix",
-                precision=9,
-            )
             # using telescope A times as reference time
             if fast==True:
-                delta_t=t0_a-t0_a[0]+t0_a_offset-t0_a_offset[0]
-                dt_vals=(sample_rate * 1e-6 * (t_a_indices[:, np.newaxis] + 1 + np.arange(wij))+delta_t[:,np.newaxis])
+                t0_a_offset=bbdata_a["time0"]["ctime_offset"][:] + t_a_indices * (sample_rate*1e-6)  # array of length 1024
+                start_times = Time(
+                    t0_a[0],
+                    val2=t0_a_offset[0],
+                    format="unix",
+                    precision=9,
+                )
+                delta_t=t0_a-t0_a[0]+t0_a_offset-t0_a_offset[0] #difference between reference start time and nth freqeucny start time
+                dt_vals=sample_rate * 1e-6 * np.arange(wij)+delta_t[:,np.newaxis]
                 geodelays_flattened = calc_results.baseline_delay(
                     ant1=index_A, ant2=index_B, time=start_times, src=kkpointing,scan=0,
                     dt=dt_vals
                 ) # difxcalc scan number should be zero (is distinct from pyfx scan number)!
                 geodelays = geodelays_flattened.reshape(dt_vals.shape)
             else:
+                t0_a_offset=bbdata_a["time0"]["ctime_offset"][:] # array of length 1024
                 start_times = Time(
                     t0_a,
                     val2=t0_a_offset,
@@ -250,7 +245,6 @@ def crosscorr_core(
                     query_times = start_times[i] + sample_rate*1e-6 * un.s * (t_a_indices[i]+np.arange(wij))
                     geodelays[i,:]=calc_results.baseline_delay(
                         ant1=index_A, ant2=index_B, time=query_times, src=kkpointing,scan=0)# difxcalc scan number should be zero (is distinct from pyfx scan number)!
-
             # Fringestopping B -> A
             scan_a, scan_b_fs = get_aligned_scans(
                 bbdata_a, bbdata_b, t_a_indices, wij, geodelays,
