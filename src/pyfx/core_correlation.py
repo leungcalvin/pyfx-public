@@ -246,7 +246,6 @@ def crosscorr_core(
                     geodelays[i,:]=calc_results.baseline_delay(
                         ant1=index_A, ant2=index_B, time=query_times, src=kkpointing,scan=0)# difxcalc scan number should be zero (is distinct from pyfx scan number)!
             # Fringestopping B -> A
-            print(geodelays.flatten())
             scan_a, scan_b_fs = get_aligned_scans(
                 bbdata_a, bbdata_b, t_a_indices, wij, geodelays,
                 complex_conjugate_convention=complex_conjugate_convention, intra_channel_sign=intra_channel_sign, sample_rate=sample_rate,
