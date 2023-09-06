@@ -42,8 +42,7 @@ import astropy.coordinates as ac
 import astropy.units as un
 from baseband_analysis.core import BBData
 from baseband_analysis.core.sampling import fill_waterfall,_scrunch
-from difxcalc_wrapper import io, runner, telescopes
-from difxcalc_wrapper.config import DIFXCALC_CMD
+from pycalc11 import Calc
 from scipy.fft import fft, ifft, next_fast_len
 from scipy.stats import median_abs_deviation
 
@@ -324,22 +323,20 @@ class CorrJob:
 
         earliest_start_unix = int(earliest_start_unix - 1) # buffer
         duration_sec = int(latest_end_unix - earliest_start_unix + 1.0 )
-        calcfile_name = os.path.join(CALCFILE_DIR, 'pyfx_corrjob_' + str(bbdata_0.attrs['event_id']) + '_' + datetime.datetime.now().strftime('%Y%m%dT%H%M%S') + '.calc')
-        _ = io.make_calc(
-            telescopes =self.telescopes,
-            sources = self.pointings,
-            time = Time(earliest_start_unix, format = 'unix', precision = 9),
-            duration_sec=duration_sec,
-            ofile_name=calcfile_name,
+        ci = Calc(
+            station_names=[tel.info.name for tel in self.telescopes],
+            station_coords=self.telescopes,
+            source_names=source_names,
+            source_coords=self.pointings,
+            time=Time(earliest_start_unix, format = 'unix', precision = 9),
+            duration_min=duration_min,
+            base_mode='geocenter', 
+            dry_atm=True, 
+            wet_atm=True
         )
-        self.calcresults = runner.run_difxcalc(
-            calcfile_name,
-            sources=self.pointings,
-            telescopes=self.telescopes,
-            force=True,
-            remove_calcfile=True,
-            difxcalc_cmd=DIFXCALC_CMD,
-        )
+        ci.run_driver()
+        self.pycalc_results=ci
+    
         return 
 
         #for ii_b in range(len(self.tel_names)):

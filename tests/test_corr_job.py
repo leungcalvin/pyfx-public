@@ -4,10 +4,10 @@ import astropy.units as un
 from baseband_analysis.core import BBData
 from baseband_analysis.core.sampling import fill_waterfall
 
-from pyfx import corr_job
+from pyfx import corr_job_pycalc
 
-chime_file='/home/calvin/public/astro_256150292_multibeam_LOFAR_L725386_24.2440833_47.8580556_chime.h5'
-kko_file='/home/calvin/public/astro_256150292_multibeam_LOFAR_L725386_24.2440833_47.8580556_kko.h5'
+chime_file='/arc/home/calvin/astro_256150292_multibeam_LOFAR_L725386_24.2440833_47.8580556_chime.h5'
+kko_file='/arc/home/calvin/astro_256150292_multibeam_LOFAR_L725386_24.2440833_47.8580556_kko.h5'
 FLOAT64_PRECISION = 2 * 2**-22 #our times should be this good: https://www.leebutterman.com/2021/02/01/store-your-unix-epoch-times-as-float64.html
 
 def test_corr_job_runs_filled():
@@ -16,11 +16,7 @@ def test_corr_job_runs_filled():
 
     fill_waterfall(chime_bbdata, write=True)
     fill_waterfall(out_bbdata, write=True)
-
-    ra=np.array(chime_bbdata['tiedbeam_locations']['ra'][0])
-    dec=np.array(chime_bbdata['tiedbeam_locations']['dec'][0])
-    sources = [ac.SkyCoord(ra=ra * un.degree, dec=dec * un.degree, frame="icrs")]
-    ncp_job = corr_job.CorrJob([chime_file,kko_file],
+    ncp_job = corr_job_pycalc.CorrJob([chime_file,kko_file],
         ras = np.array(chime_bbdata['tiedbeam_locations']['ra'][0]),
         decs = np.array(chime_bbdata['tiedbeam_locations']['dec'][0])
                    )
@@ -46,11 +42,7 @@ def test_corr_job_runs_no_fill():
     """Same as the above, but no fill_waterfall"""
     chime_bbdata = BBData.from_file(chime_file)
     out_bbdata = BBData.from_file(kko_file)
-
-    ra=np.array(chime_bbdata['tiedbeam_locations']['ra'][0])
-    dec=np.array(chime_bbdata['tiedbeam_locations']['dec'][0])
-    sources = [ac.SkyCoord(ra=ra * un.degree, dec=dec * un.degree, frame="icrs")]
-    ncp_job = corr_job.CorrJob([chime_file,kko_file],
+    ncp_job = corr_job_pycalc.CorrJob([chime_file,kko_file],
         ras = np.array(chime_bbdata['tiedbeam_locations']['ra'][0]),
         decs = np.array(chime_bbdata['tiedbeam_locations']['dec'][0])
                    )
