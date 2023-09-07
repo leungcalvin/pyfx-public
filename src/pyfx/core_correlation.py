@@ -72,7 +72,7 @@ def autocorr_core(
             a_shape = list(bbdata_a['tiedbeam_baseband'][:,kkpointing:kkpointing+n_pol,:].shape)
             a_shape[-1] = wij
             clipped_a = np.zeros(a_shape, dtype=bbdata_a['tiedbeam_baseband'].dtype)
-            if len(np.uniqnue(t_a_indices))==1 and not zp:
+            if len(np.unique(t_a_indices))==1 and not zp:
                 # go fast
                 clipped_a[:, ...] = bbdata_a['tiedbeam_baseband'][:,kkpointing:kkpointing+n_pol,
                                                                 t_a_indices[0]:t_a_indices[0] + wij]
