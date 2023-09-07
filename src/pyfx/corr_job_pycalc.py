@@ -51,7 +51,6 @@ from astropy.time import Time,TimeDelta
 
 from pyfx.core_correlation import autocorr_core, crosscorr_core
 from pyfx.bbdata_io import station_from_bbdata, get_all_time0, get_all_im_freq
-from pyfx.config import CALCFILE_DIR
 
 from coda.core import VLBIVis
 
@@ -306,10 +305,7 @@ class CorrJob:
             decs = bbdata_0['tiedbeam_locations']['dec'][:]
         self.ras = np.atleast_1d(ras)
         self.decs = np.atleast_1d(decs)
-        self.pointings = [
-            ac.SkyCoord(ra=r * un.deg, dec=d * un.deg)
-            for r, d in zip(self.ras.flatten(), self.decs.flatten())
-        ]
+        self.pointings = ac.SkyCoord(ra=self.ras.flatten() * un.deg, dec=self.decs.flatten() * un.deg)
 
         earliest_start_unix = np.inf
         latest_end_unix = -np.inf
@@ -324,13 +320,11 @@ class CorrJob:
         earliest_start_unix = int(earliest_start_unix - 1) # buffer
         duration_min = max(int(np.ceil(int(latest_end_unix - earliest_start_unix + 1.0 )/60)),1)
 
-        source_names = [f"src{si}" for si in range(len(self.pointings))]
         ci = Calc(
                 station_names=[tel.info.name for tel in self.telescopes],
                 station_coords=self.telescopes,
-                source_names=source_names,
                 source_coords=self.pointings,
-                time=Time(earliest_start_unix, format = 'unix', precision = 9),
+                start_time=Time(earliest_start_unix, format = 'unix', precision = 9),
                 duration_min=duration_min,
                 base_mode='geocenter', 
                 dry_atm=True, 
@@ -468,10 +462,13 @@ class CorrJob:
             dtype = float) 
             # tij_sp.shape = (n_station, n_freq, n_pointing, n_time)
 
+        delays= self.pycalc_results.interpolate_delays(Time(tij.flatten(),format = 'unix'))[:,0,:,:] #delays.shape = (n_freq * n_time, n_????, n_station, n_pointing??) 
+        # CL: idk what the n_???? axis is, downselect it out for now; TODO: ask Adam L later
+        delays -= delays[:, iiref, None,:] # subtract delay at the reference station -- now we have instantaneous baseline delays of shape (n_freq * n_time, n_station, n_pointing)
+        #TODO: check what first and second pointing index is in the above line ^
         for iitel, telescope in enumerate(self.telescopes):
             for jjpointing, pointing in enumerate(self.pointings):
-                delays= self.pycalc_results.interpolate_delays(Time(tij.flatten(),format = 'unix'))
-                tau_ij=delays[:,0,iitel,jjpointing]-delays[:,0,iiref,jjpointing] #check what first and second pointing index is?
+                tau_ij = delays[:, iitel, jjpointing].reshape(tij.shape) 
                 tij_sp[iitel,:,jjpointing,:] = tij + tau_ij
         return tij_sp
 
