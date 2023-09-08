@@ -51,6 +51,7 @@ from astropy.time import Time,TimeDelta
 
 from pyfx.core_correlation import autocorr_core, crosscorr_core
 from pyfx.bbdata_io import station_from_bbdata, get_all_time0, get_all_im_freq
+from pyfx import telescopes
 from pyfx.config import CALCFILE_DIR
 
 from coda.core import VLBIVis
@@ -306,10 +307,7 @@ class CorrJob:
             decs = bbdata_0['tiedbeam_locations']['dec'][:]
         self.ras = np.atleast_1d(ras)
         self.decs = np.atleast_1d(decs)
-        self.pointings = [
-            ac.SkyCoord(ra=r * un.deg, dec=d * un.deg)
-            for r, d in zip(self.ras.flatten(), self.decs.flatten())
-        ]
+        self.pointings = ac.SkyCoord(ra=self.ras.flatten(), dec=self.decs.flatten(), unit = 'deg',frame = 'icrs')
 
         earliest_start_unix = np.inf
         latest_end_unix = -np.inf
@@ -322,13 +320,12 @@ class CorrJob:
                 this_bbdata['time0']['ctime'][-1] + this_bbdata.ntime)
 
         earliest_start_unix = int(earliest_start_unix - 1) # buffer
-        duration_sec = int(latest_end_unix - earliest_start_unix + 1.0 )
+        duration_min = int((latest_end_unix - earliest_start_unix + 1.0) / 60)
         ci = Calc(
             station_names=[tel.info.name for tel in self.telescopes],
             station_coords=self.telescopes,
-            source_names=source_names,
             source_coords=self.pointings,
-            time=Time(earliest_start_unix, format = 'unix', precision = 9),
+            start_time=Time(earliest_start_unix, format = 'unix', precision = 9),
             duration_min=duration_min,
             base_mode='geocenter', 
             dry_atm=True, 
