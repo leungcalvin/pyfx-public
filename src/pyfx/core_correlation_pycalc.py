@@ -10,7 +10,6 @@ import collections
 from pycalc11 import Calc
 
 from baseband_analysis.core.bbdata import BBData
-from difxcalc_wrapper.io import IMReader
 from typing import Optional, Tuple, Union
 
 K_DM = 1 / 2.41e-4  # in s MHz^2 / (pc cm^-3)
