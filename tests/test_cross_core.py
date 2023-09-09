@@ -244,26 +244,46 @@ def test_continuum_calibrator_pycalc():
     window *= ntime  # set to 1000 for smaller test, max 43670
     
     weight=None
-    source_coords = ac.SkyCoord(
+    start_time = np.min(time0)
+    duration_min = 1
+    
+    try: # this is depreciated
+        srcs = ac.SkyCoord(
         ra=ra,
         dec=dec,
         unit='deg',
         frame='icrs',
-    )
-
-    start_time = np.min(time0)
-    duration_min = 1
-
-    ci = Calc(
-        station_names=telescope_names,
-        station_coords=telescopes,
-        source_coords=source_coords,
-        start_time=start_time,
-        duration_min=duration_min,
-        base_mode='geocenter', 
-        dry_atm=False, 
-        wet_atm=False
-    )
+        )
+        source_coords = [srcs]
+        source_names = [f"src{si}" for si in range(len(source_coords))]
+        ci = Calc(
+            station_names=telescope_names,
+            station_coords=telescopes,
+            source_names=source_names,
+            source_coords=source_coords,
+            time=start_time,
+            duration_min=duration_min,
+            base_mode='geocenter', 
+            dry_atm=False, 
+            wet_atm=False
+        )
+    except:
+        srcs = ac.SkyCoord(
+            ra=np.array([ra]),
+            dec=np.array([dec]),
+            unit='deg',
+            frame='icrs',
+        )
+        ci = Calc(
+            station_names=telescope_names,
+            station_coords=telescopes,
+            source_coords=srcs,
+            start_time=start_time,
+            duration_min=1,
+            base_mode='geocenter', 
+            dry_atm=False, 
+            wet_atm=False
+        )
     ci.run_driver()
     cross=crosscorr_core(bbdata_a=chime_bbdata, bbdata_b=out_bbdata, t_a=t_a, window=window, R=R, pycalc_results=ci,DM=0,
                         index_A=0, index_B=1,sample_rate=2.56,max_lag=max_lag,n_pol=2,
@@ -427,29 +447,46 @@ def test_pulsar_pycalc():
     window=np.ones((nscan,npointing),int)
     window*=761
     weight=None
-    srcs = ac.SkyCoord(
+    start_time = np.min(time0)
+    duration_min = 1
+    
+    try: # this is depreciated
+        srcs = ac.SkyCoord(
         ra=ra,
         dec=dec,
         unit='deg',
         frame='icrs',
-    )
-
-    start_time = np.min(time0)
-    duration_min = 1
-    print(telescopes)
-    print(srcs)
-    print(start_time)
-    print(duration_min)
-    ci = Calc(
-        station_names=telescope_names,
-        station_coords=telescopes,
-        source_coords=srcs,
-        start_time=start_time,
-        duration_min=duration_min,
-        base_mode='geocenter', 
-        dry_atm=False, 
-        wet_atm=False
-    )
+        )
+        source_coords = [srcs]
+        source_names = [f"src{si}" for si in range(len(source_coords))]
+        ci = Calc(
+            station_names=telescope_names,
+            station_coords=telescopes,
+            source_names=source_names,
+            source_coords=source_coords,
+            time=start_time,
+            duration_min=duration_min,
+            base_mode='geocenter', 
+            dry_atm=False, 
+            wet_atm=False
+        )
+    except:
+        srcs = ac.SkyCoord(
+            ra=np.array([ra]),
+            dec=np.array([dec]),
+            unit='deg',
+            frame='icrs',
+        )
+        ci = Calc(
+            station_names=telescope_names,
+            station_coords=telescopes,
+            source_coords=srcs,
+            start_time=start_time,
+            duration_min=1,
+            base_mode='geocenter', 
+            dry_atm=False, 
+            wet_atm=False
+        )
     ci.run_driver()
     cross=crosscorr_core(bbdata_a=chime_bbdata, bbdata_b=out_bbdata, t_a=t_a, window=window, R=R, pycalc_results=ci,DM=57.1,
                         index_A=0, index_B=1,sample_rate=2.56,max_lag=max_lag,n_pol=2,
