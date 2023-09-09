@@ -486,8 +486,8 @@ class CorrJob:
         else:
             wfall = bbdata_A['tiedbeam_baseband'][:]
         wwfall = np.abs(wfall)**2
-        wwfall -= np.median(wwfall,axis = -1)[:,:,None]
-        wwfall /= median_abs_deviation(wwfall,axis = -1)[:,:,None]
+        wwfall -= np.nanmedian(wwfall,axis = -1)[:,:,None]
+        wwfall /= median_abs_deviation(wwfall,axis = -1,nan_policy='omit')[:,:,None]
         if tscrunch is None:
             tscrunch = int(np.median(w) // 10 )
         sww = _scrunch(wwfall,fscrunch = fscrunch, tscrunch = tscrunch)
