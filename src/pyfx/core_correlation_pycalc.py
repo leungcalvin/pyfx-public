@@ -305,7 +305,7 @@ def crosscorr_core(
     return cross_vis
 
 def getitem_zp1d(arr,start_want,stop_want):
-    """Acts like arr[start_want:stop_want] but assumes start is strictly less than stop.
+    """For a 1d-array, acts like arr[start_want:stop_want] but assumes start is strictly less than stop.
 
     It returns output with the properties that 
         1) width = stop_want - start_want 
@@ -321,7 +321,6 @@ def getitem_zp1d(arr,start_want,stop_want):
         We zero-pad at the end of the output
     All in : start_have < start_want < stop_want < stop_have -- easy peasy.
     
-    TODO: make this work over a given axis of an arbitrary np.ndarray
     """
     width = stop_want - start_want
     assert width >= 0, "Negative scan length not allowed; check your w_ij"
@@ -459,7 +458,7 @@ def get_aligned_scans(
         correction_factor =wij / new_wij
         if correction_factor.any() > 2:
             # warn the user that the boundary conditions are sketch if we are missing e.g. more than half the data.
-            print("warning: based on specified start time and scan length, over half the data is missing from telescope XX.")
+            print("Warning: based on specified start time and scan length, over half the data is missing from telescope XX.")
 
         for i in range(len(pad_index_b)):
             aligned_b[i, ..., pad_index_b[i]:pad_index_b[i]+new_wij[i]] = \

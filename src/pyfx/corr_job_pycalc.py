@@ -45,14 +45,12 @@ from baseband_analysis.core.sampling import fill_waterfall,_scrunch
 from pycalc11 import Calc
 from scipy.fft import fft, ifft, next_fast_len
 from scipy.stats import median_abs_deviation
-
+from pyfx import telescopes
 from decimal import Decimal
 from astropy.time import Time,TimeDelta
 
-from pyfx.core_correlation import autocorr_core, crosscorr_core
+from pyfx.core_correlation_pycalc import autocorr_core, crosscorr_core
 from pyfx.bbdata_io import station_from_bbdata, get_all_time0, get_all_im_freq
-from pyfx import telescopes
-from pyfx.config import CALCFILE_DIR
 
 from coda.core import VLBIVis
 
@@ -284,7 +282,7 @@ class CorrJob:
         Choose station to use as the reference station, at which t_{ij} is initially inputted.
         For each station, define t_ij, w_ij, and r_ij into arrays of shape (N_baseline, N_freq, N_time) by calling define_scan_params().
         Given a set of BBData objects, define N * (N-1) / 2 baselines.
-        Use run_difxcalc and save to self.calcresults so we only call difxcalc ONCE in the whole correlator job.
+        Use run_difxcalc and save to self.pycalc_results so we only call difxcalc ONCE in the whole correlator job.
         """
         self.tel_names= []
         for path in bbdata_filepaths:
@@ -307,7 +305,7 @@ class CorrJob:
             decs = bbdata_0['tiedbeam_locations']['dec'][:]
         self.ras = np.atleast_1d(ras)
         self.decs = np.atleast_1d(decs)
-        self.pointings = ac.SkyCoord(ra=self.ras.flatten(), dec=self.decs.flatten(), unit = 'deg',frame = 'icrs')
+        self.pointings = ac.SkyCoord(ra=self.ras.flatten() * un.deg, dec=self.decs.flatten() * un.deg)
 
         earliest_start_unix = np.inf
         latest_end_unix = -np.inf
@@ -320,29 +318,25 @@ class CorrJob:
                 this_bbdata['time0']['ctime'][-1] + this_bbdata.ntime)
 
         earliest_start_unix = int(earliest_start_unix - 1) # buffer
-        duration_min = int((latest_end_unix - earliest_start_unix + 1.0) / 60)
+        duration_min = 1 #max(int(np.ceil(int(latest_end_unix - earliest_start_unix + 1.0 )/60)),1)
+        print(self.telescopes)
+        print(self.pointings)
+        print(np.floor(earliest_start_unix))
+        print(duration_min)
         ci = Calc(
-            station_names=[tel.info.name for tel in self.telescopes],
-            station_coords=self.telescopes,
-            source_coords=self.pointings,
-            start_time=Time(earliest_start_unix, format = 'unix', precision = 9),
-            duration_min=duration_min,
-            base_mode='geocenter', 
-            dry_atm=True, 
-            wet_atm=True
-        )
+                station_names=[tel.info.name for tel in self.telescopes],
+                station_coords=self.telescopes,
+                source_coords=self.pointings,
+                start_time=Time(np.floor(earliest_start_unix), format = 'unix', precision = 9),
+                duration_min=duration_min,
+                base_mode='geocenter', 
+                dry_atm=False, 
+                wet_atm=False
+            )
         ci.run_driver()
         self.pycalc_results=ci
-    
         return 
 
-        #for ii_b in range(len(self.tel_names)):
-        #tau_00 = self.calcresults.baseline_delay(
-        #    ant1=self.tel_names.index(ref_station),
-        #    ant2=ii_b,
-        #    time=Time(unix_a, format="unix"),
-        #    src=src,  # should be a 1 time value x 1 pointing evaluation
-        #)
 
     def t0_f0_from_bbdata_filename(self,t0f0,bbdata_ref_filename):
         """ Returns the actual t00 and f0 from bbdata_ref.
@@ -471,14 +465,13 @@ class CorrJob:
             dtype = float) 
             # tij_sp.shape = (n_station, n_freq, n_pointing, n_time)
 
+        delays= self.pycalc_results.interpolate_delays(Time(tij.flatten(),format = 'unix'))[:,0,:,:] #delays.shape = (n_freq * n_time, n_????, n_station, n_pointing??) 
+        # CL: idk what the n_???? axis is, downselect it out for now; TODO: ask Adam L later
+        delays -= delays[:, iiref, None,:] # subtract delay at the reference station -- now we have instantaneous baseline delays of shape (n_freq * n_time, n_station, n_pointing)
+        #TODO: check what first and second pointing index is in the above line ^
         for iitel, telescope in enumerate(self.telescopes):
             for jjpointing, pointing in enumerate(self.pointings):
-                tau_ij = self.calcresults.baseline_delay(
-                    ant1 = iiref, 
-                    ant2 = iitel,
-                    time = Time(tij.flatten(),format = 'unix'),
-                    src = jjpointing,
-                    ).reshape(tij.shape)
+                tau_ij = delays[:, iitel, jjpointing].reshape(tij.shape) 
                 tij_sp[iitel,:,jjpointing,:] = tij + tau_ij
         return tij_sp
 
@@ -493,8 +486,8 @@ class CorrJob:
         else:
             wfall = bbdata_A['tiedbeam_baseband'][:]
         wwfall = np.abs(wfall)**2
-        wwfall -= np.median(wwfall,axis = -1)[:,:,None]
-        wwfall /= median_abs_deviation(wwfall,axis = -1)[:,:,None]
+        wwfall -= np.nanmedian(wwfall,axis = -1)[:,:,None]
+        wwfall /= median_abs_deviation(wwfall,axis = -1,nan_policy='omit')[:,:,None]
         if tscrunch is None:
             tscrunch = int(np.median(w) // 10 )
         sww = _scrunch(wwfall,fscrunch = fscrunch, tscrunch = tscrunch)
@@ -589,20 +582,22 @@ class CorrJob:
                 bbdata_b = BBData.from_file(self.bbdata_filepaths[iib])
                 fill_waterfall(bbdata_b, write = True)
                 print(f'Calculating visibilities for baseline {iia}-{iib}')
+                print('indices_a:',indices_a[30:40,0])
                 vis = crosscorr_core(
                         bbdata_a, 
                         bbdata_b, 
                         indices_a,
                         w_ij, 
                         r_ij,
-                        self.calcresults, 
+                        self.pycalc_results, 
                         DM = dm, 
                         index_A = iia,
                         index_B = iib,
                         max_lag = self.max_lag, 
                         complex_conjugate_convention = -1, 
                         intra_channel_sign = 1,
-                        fast = False,
+                        fast = True,
+                        weight = None
                     )
                 #print('WARNING: iia <--> iib swapped in crosscorr_core')
                 output._from_ndarray_baseline(
