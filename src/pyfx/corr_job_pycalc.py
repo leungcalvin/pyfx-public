@@ -49,7 +49,7 @@ from pyfx import telescopes
 from decimal import Decimal
 from astropy.time import Time,TimeDelta
 
-from pyfx.core_correlation import autocorr_core, crosscorr_core
+from pyfx.core_correlation_pycalc import autocorr_core, crosscorr_core
 from pyfx.bbdata_io import station_from_bbdata, get_all_time0, get_all_im_freq
 
 from coda.core import VLBIVis
@@ -282,7 +282,7 @@ class CorrJob:
         Choose station to use as the reference station, at which t_{ij} is initially inputted.
         For each station, define t_ij, w_ij, and r_ij into arrays of shape (N_baseline, N_freq, N_time) by calling define_scan_params().
         Given a set of BBData objects, define N * (N-1) / 2 baselines.
-        Use run_difxcalc and save to self.calcresults so we only call difxcalc ONCE in the whole correlator job.
+        Use run_difxcalc and save to self.pycalc_results so we only call difxcalc ONCE in the whole correlator job.
         """
         self.tel_names= []
         for path in bbdata_filepaths:
@@ -318,17 +318,20 @@ class CorrJob:
                 this_bbdata['time0']['ctime'][-1] + this_bbdata.ntime)
 
         earliest_start_unix = int(earliest_start_unix - 1) # buffer
-        duration_min = max(int(np.ceil(int(latest_end_unix - earliest_start_unix + 1.0 )/60)),1)
-
+        duration_min = 1 #max(int(np.ceil(int(latest_end_unix - earliest_start_unix + 1.0 )/60)),1)
+        print(self.telescopes)
+        print(self.pointings)
+        print(np.floor(earliest_start_unix))
+        print(duration_min)
         ci = Calc(
                 station_names=[tel.info.name for tel in self.telescopes],
                 station_coords=self.telescopes,
                 source_coords=self.pointings,
-                start_time=Time(earliest_start_unix, format = 'unix', precision = 9),
+                start_time=Time(np.floor(earliest_start_unix), format = 'unix', precision = 9),
                 duration_min=duration_min,
                 base_mode='geocenter', 
-                dry_atm=True, 
-                wet_atm=True
+                dry_atm=False, 
+                wet_atm=False
             )
         ci.run_driver()
         self.pycalc_results=ci
@@ -579,20 +582,22 @@ class CorrJob:
                 bbdata_b = BBData.from_file(self.bbdata_filepaths[iib])
                 fill_waterfall(bbdata_b, write = True)
                 print(f'Calculating visibilities for baseline {iia}-{iib}')
+                print('indices_a:',indices_a[30:40,0])
                 vis = crosscorr_core(
                         bbdata_a, 
                         bbdata_b, 
                         indices_a,
                         w_ij, 
                         r_ij,
-                        self.calcresults, 
+                        self.pycalc_results, 
                         DM = dm, 
                         index_A = iia,
                         index_B = iib,
                         max_lag = self.max_lag, 
                         complex_conjugate_convention = -1, 
                         intra_channel_sign = 1,
-                        fast = False,
+                        fast = True,
+                        weight = None
                     )
                 #print('WARNING: iia <--> iib swapped in crosscorr_core')
                 output._from_ndarray_baseline(
@@ -691,7 +696,3 @@ if __name__ == "__main__":
     else:
         output = run_correlator_job(t_ij, w_ij, r_ij)
     output.save(parser.out_file)
-
-
-
-
