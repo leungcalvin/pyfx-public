@@ -45,14 +45,12 @@ from baseband_analysis.core.sampling import fill_waterfall,_scrunch
 from pycalc11 import Calc
 from scipy.fft import fft, ifft, next_fast_len
 from scipy.stats import median_abs_deviation
-
+from pyfx import telescopes
 from decimal import Decimal
 from astropy.time import Time,TimeDelta
 
-from pyfx.core_correlation import autocorr_core, crosscorr_core
+from pyfx.core_correlation_pycalc import autocorr_core, crosscorr_core
 from pyfx.bbdata_io import station_from_bbdata, get_all_time0, get_all_im_freq
-from pyfx import telescopes
-from pyfx.config import CALCFILE_DIR
 
 from coda.core import VLBIVis
 
@@ -152,7 +150,7 @@ def validate_wij(w_ij, t_ij, r_ij, dm=None):
     # overlapping sub-integrations: 
     sub_scan_start = t_ij + 2.56e-6 * (w_ij // 2 - (w_ij * r_ij / 2))
     sub_scan_end = t_ij + 2.56e-6 * (w_ij // 2 + (w_ij * r_ij / 2))
-    assert ((sub_scan_end[:,:,:,iisort][:,:,:,0:-1] - sub_scan_start[:,:,:,iisort][:,:,:,1:]) < w_ij[:,:,:-1][None] * 2.56e-6 * 0.01).all(), "next scan overlaps more than 1% with previous scan? you probably do not want this" 
+    #assert ((sub_scan_end[:,:,:,iisort][:,:,:,0:-1] - sub_scan_start[:,:,:,iisort][:,:,:,1:]) < w_ij[:,:,:-1][None] * 2.56e-6 * 0.01).all(), "next scan overlaps more than 1% with previous scan? you probably do not want this" 
     
     # no changing integer lags
     earth_rotation_time = 0.4125  # seconds https://www.wolframalpha.com/input?i=1.28+us+*+c+%2F+%28earth+rotation+speed+*+2%29
@@ -284,7 +282,7 @@ class CorrJob:
         Choose station to use as the reference station, at which t_{ij} is initially inputted.
         For each station, define t_ij, w_ij, and r_ij into arrays of shape (N_baseline, N_freq, N_time) by calling define_scan_params().
         Given a set of BBData objects, define N * (N-1) / 2 baselines.
-        Use run_difxcalc and save to self.calcresults so we only call difxcalc ONCE in the whole correlator job.
+        Use run_difxcalc and save to self.pycalc_results so we only call difxcalc ONCE in the whole correlator job.
         """
         self.tel_names= []
         for path in bbdata_filepaths:
@@ -307,7 +305,7 @@ class CorrJob:
             decs = bbdata_0['tiedbeam_locations']['dec'][:]
         self.ras = np.atleast_1d(ras)
         self.decs = np.atleast_1d(decs)
-        self.pointings = ac.SkyCoord(ra=self.ras.flatten(), dec=self.decs.flatten(), unit = 'deg',frame = 'icrs')
+        self.pointings = ac.SkyCoord(ra=self.ras.flatten() * un.deg, dec=self.decs.flatten() * un.deg)
 
         earliest_start_unix = np.inf
         latest_end_unix = -np.inf
@@ -320,29 +318,26 @@ class CorrJob:
                 this_bbdata['time0']['ctime'][-1] + this_bbdata.ntime)
 
         earliest_start_unix = int(earliest_start_unix - 1) # buffer
-        duration_min = int((latest_end_unix - earliest_start_unix + 1.0) / 60)
+        duration_min = 1 #max(int(np.ceil(int(latest_end_unix - earliest_start_unix + 1.0 )/60)),1)
+        print(self.telescopes)
+        print(self.pointings)
+        print(np.floor(earliest_start_unix))
+        print(duration_min)
+        print(Time(np.floor(earliest_start_unix), format = 'unix', precision = 9))
         ci = Calc(
-            station_names=[tel.info.name for tel in self.telescopes],
-            station_coords=self.telescopes,
-            source_coords=self.pointings,
-            start_time=Time(earliest_start_unix, format = 'unix', precision = 9),
-            duration_min=duration_min,
-            base_mode='geocenter', 
-            dry_atm=True, 
-            wet_atm=True
-        )
+                station_names=[tel.info.name for tel in self.telescopes],
+                station_coords=self.telescopes,
+                source_coords=self.pointings,
+                start_time=Time(np.floor(earliest_start_unix), format = 'unix', precision = 9),
+                duration_min=duration_min,
+                base_mode='geocenter', 
+                dry_atm=True, 
+                wet_atm=True
+            )
         ci.run_driver()
         self.pycalc_results=ci
-    
         return 
 
-        #for ii_b in range(len(self.tel_names)):
-        #tau_00 = self.calcresults.baseline_delay(
-        #    ant1=self.tel_names.index(ref_station),
-        #    ant2=ii_b,
-        #    time=Time(unix_a, format="unix"),
-        #    src=src,  # should be a 1 time value x 1 pointing evaluation
-        #)
 
     def t0_f0_from_bbdata_filename(self,t0f0,bbdata_ref_filename):
         """ Returns the actual t00 and f0 from bbdata_ref.
@@ -386,7 +381,7 @@ class CorrJob:
         time_ordered = False,
         pdot = 0,
         dm = None,
-        max_lag = 20,
+        max_lag = 100,
     ):
         """
         Tells the correlator when to start integrating, how long to start integrating, for each station. Run this after the CorrJob() is instantiated.
@@ -471,14 +466,13 @@ class CorrJob:
             dtype = float) 
             # tij_sp.shape = (n_station, n_freq, n_pointing, n_time)
 
+        delays= self.pycalc_results.interpolate_delays(Time(tij.flatten(),format = 'unix'))[:,0,:,:] #delays.shape = (n_freq * n_time, n_????, n_station, n_pointing??) 
+        # CL: idk what the n_???? axis is, downselect it out for now; TODO: ask Adam L later
+        delays -= delays[:, iiref, None,:] # subtract delay at the reference station -- now we have instantaneous baseline delays of shape (n_freq * n_time, n_station, n_pointing)
+        #TODO: check what first and second pointing index is in the above line ^
         for iitel, telescope in enumerate(self.telescopes):
             for jjpointing, pointing in enumerate(self.pointings):
-                tau_ij = self.calcresults.baseline_delay(
-                    ant1 = iiref, 
-                    ant2 = iitel,
-                    time = Time(tij.flatten(),format = 'unix'),
-                    src = jjpointing,
-                    ).reshape(tij.shape)
+                tau_ij = delays[:, iitel, jjpointing].reshape(tij.shape) 
                 tij_sp[iitel,:,jjpointing,:] = tij + tau_ij
         return tij_sp
 
@@ -489,22 +483,22 @@ class CorrJob:
         if dm is not None:
             from baseband_analysis.core.dedispersion import coherent_dedisp
             # TODO: CL: need to replace with pyfx.core_correlation.intrachannel_dedisp
-            wfall = coherent_dedisp(data = bbdata_A,DM = dm)
+            wfall = coherent_dedisp(data = bbdata_A,DM = dm,time_shift=False)
         else:
             wfall = bbdata_A['tiedbeam_baseband'][:]
         wwfall = np.abs(wfall)**2
-        wwfall -= np.median(wwfall,axis = -1)[:,:,None]
-        wwfall /= median_abs_deviation(wwfall,axis = -1)[:,:,None]
+        wwfall -= np.nanmedian(wwfall,axis = -1)[:,:,None]
+        wwfall /= median_abs_deviation(wwfall,axis = -1,nan_policy='omit')[:,:,None]
         if tscrunch is None:
-            tscrunch = int(np.median(w) // 10 )
+            tscrunch = int((np.median(w) // 10 ))
         sww = _scrunch(wwfall,fscrunch = fscrunch, tscrunch = tscrunch)
         del wwfall
-        f = plt.figure()
-        plt.imshow(sww[:,pointing] + sww[:,pointing+1],aspect = 'auto',vmin = -1,vmax = 3,interpolation = 'none')
-
         y = np.arange(1024)
         for iiscan in range(t.shape[-1]):
-            x_start = (t[iiref,:,pointing,iiscan] - bbdata_A['time0']['ctime'][:]) / (2.56e-6 * tscrunch)
+            f = plt.figure()
+            plt.imshow(sww[:,pointing] + sww[:,pointing+1],aspect = 'auto',vmin = -1,vmax = 3,interpolation = 'none')
+
+            x_start = (t[iiref,:,pointing,iiscan] - bbdata_A['time0']['ctime'][:]- bbdata_A['time0']['ctime_offset'][:]) / (2.56e-6 * tscrunch)
             x_end = x_start + w[:,pointing,iiscan] / tscrunch
             x_mid = x_start + (x_end - x_start) * 0.5 
             x_rminus = x_mid - (x_end - x_start) * 0.5 * r[:,pointing,iiscan]
@@ -514,21 +508,74 @@ class CorrJob:
                 linestyle = '-'
             else:
                 linestyle = '--'
-            plt.plot(x_start, y/fscrunch,linestyle = linestyle,color = 'black') # shade t
+            plt.plot(x_start, y/fscrunch,linestyle = linestyle,color = 'black',label='window') # shade t
             plt.plot(x_end, y/fscrunch,linestyle = linestyle,color = 'black') # shade t + w
-            plt.plot(x_rminus, y/fscrunch,linestyle = '-.',color = 'black') # shade t + w/2 - r/2
+            plt.plot(x_rminus, y/fscrunch,linestyle = '-.',color = 'black',label='integration') # shade t + w/2 - r/2
             plt.plot(x_rplus, y/fscrunch,linestyle = '-.',color = 'black') # shade t + w/2 + r/2
+            plt.legend(loc='lower left')
+            print(x_start)
+            xmin = np.min(t[iiref,:,pointing,:] - bbdata_A['time0']['ctime'][:,None],axis = -1) / (2.56e-6 * tscrunch)
+            xmax = np.max(t[iiref,:,pointing,:] - bbdata_A['time0']['ctime'][:,None],axis = -1) / (2.56e-6 * tscrunch)
 
-        xmin = np.min(t[iiref,:,pointing,:] - bbdata_A['time0']['ctime'][:,None],axis = -1) / (2.56e-6 * tscrunch)
-        xmax = np.max(t[iiref,:,pointing,:] - bbdata_A['time0']['ctime'][:,None],axis = -1) / (2.56e-6 * tscrunch)
+            plt.xlim(np.median(xmin)-100,np.median(xmax)+100)
+            plt.ylim(1024 / fscrunch,0)
+            plt.ylabel(f'Freq ID (0-1023) / {fscrunch:0.0f}')
+            plt.xlabel(f'Time ({tscrunch:0.1f} frames)')
         del bbdata_A
-
-        plt.xlim(np.median(xmin),np.median(xmax))
-        plt.ylim(1024 / fscrunch,0)
-        plt.ylabel(f'Freq ID (0-1023) / {fscrunch:0.0f}')
-        plt.xlabel(f'Time ({tscrunch:0.1f} frames)')
         return f
 
+    # shion's version
+    def visualize_twr_sea(self,
+    bbdata_A,
+    wfall,
+    t,w,r,
+    iiref=0,
+    pointing = 0,
+    dm = None,
+    fscrunch = 4, 
+    tscrunch = None,
+    vmin=0,vmax=2,
+    bad_rfi_channels=None):
+        wwfall = np.abs(wfall)**2
+        wwfall -= np.nanmedian(wwfall,axis = -1)[:,:,None]
+        wwfall /= median_abs_deviation(wwfall,axis = -1,nan_policy='omit')[:,:,None]
+        if tscrunch is None:
+            tscrunch = int((np.median(w) // 10 ))
+        sww = _scrunch(wwfall,fscrunch = fscrunch, tscrunch = tscrunch)
+        del wwfall
+        y = np.arange(1024)
+        for iiscan in range(t.shape[-1]):
+            print(iiscan)
+            f = plt.figure()
+            plt.imshow(sww[:,pointing] + sww[:,pointing+1],aspect = 'auto',vmin = vmin,vmax = vmax,interpolation = 'none')
+
+            x_start = (t[iiref,:,pointing,iiscan]- bbdata_A['time0']['ctime'][:])/ (2.56e-6 * tscrunch)
+            x_end = x_start + w[:,pointing,iiscan] / tscrunch
+            x_mid = x_start + (x_end - x_start) * 0.5 
+            x_rminus = x_mid - (x_end - x_start) * 0.5 * r[:,pointing,iiscan]
+            x_rplus = x_mid + (x_end - x_start) * 0.5 * r[:,pointing,iiscan]
+            plt.fill_betweenx(x1 = x_start, x2 = x_end,y = y/fscrunch,alpha = 0.15)
+            if iiscan == 0:
+                linestyle = '-'
+            else:
+                linestyle = '--'
+            plt.plot(x_start, y/fscrunch,linestyle = linestyle,color = 'black',label='window',lw=1) # shade t
+            plt.plot(x_end, y/fscrunch,linestyle = linestyle,color = 'black',lw=1) # shade t + w
+            plt.plot(x_rminus, y/fscrunch,linestyle = '-.',color = 'red',label='integration',lw=1) # shade t + w/2 - r/2
+            plt.plot(x_rplus, y/fscrunch,linestyle = '-.',color = 'red',lw=1) # shade t + w/2 + r/2
+            plt.legend(loc='lower right')
+            print(x_start)
+            print(x_rminus)
+            print(x_rplus)
+            xmin = np.min(t[iiref,:,pointing,:] - bbdata_A['time0']['ctime'][:,None],axis = -1) / (2.56e-6 * tscrunch)
+            xmax = np.max(t[iiref,:,pointing,:] - bbdata_A['time0']['ctime'][:,None],axis = -1) / (2.56e-6 * tscrunch)
+
+            #plt.xlim(np.median(xmin)-100,np.median(xmax)+100)
+            plt.ylim(1024 / fscrunch,0)
+            plt.ylabel(f'Freq ID (0-1023) / {fscrunch:0.0f}')
+            plt.xlabel(f'Time ({tscrunch:0.1f} frames)')
+        del bbdata_A
+        return f
     def run_correlator_job(self,t_ij, w_ij, r_ij, dm = None, event_id = None, out_h5_file = None):
         """Run auto- and cross- correlations.
 
@@ -589,20 +636,25 @@ class CorrJob:
                 bbdata_b = BBData.from_file(self.bbdata_filepaths[iib])
                 fill_waterfall(bbdata_b, write = True)
                 print(f'Calculating visibilities for baseline {iia}-{iib}')
+                print('indices_a:',indices_a[30:40,0])
+                print('w_ij:',w_ij)
+                print('r_ij:',r_ij)
+                print(self.max_lag)
                 vis = crosscorr_core(
                         bbdata_a, 
                         bbdata_b, 
-                        indices_a,
-                        w_ij, 
-                        r_ij,
-                        self.calcresults, 
+                        t_a=indices_a,
+                        window=w_ij, 
+                        R=r_ij,
+                        pycalc_results=self.pycalc_results, 
                         DM = dm, 
                         index_A = iia,
                         index_B = iib,
                         max_lag = self.max_lag, 
                         complex_conjugate_convention = -1, 
                         intra_channel_sign = 1,
-                        fast = False,
+                        fast = True,
+                        weight = None
                     )
                 #print('WARNING: iia <--> iib swapped in crosscorr_core')
                 output._from_ndarray_baseline(
