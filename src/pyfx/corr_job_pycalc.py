@@ -275,7 +275,7 @@ def extrapolate_to_full_band(time0 : np.ndarray, freq_ids : np.ndarray):
     return new_t0
 
 class CorrJob:
-    def __init__(self, bbdata_filepaths, ras = None, decs = None):
+    def __init__(self, bbdata_filepaths, ras = None, decs = None,source_names=None):
         """Set up the correlation job:
         Get stations and order the bbdata_list as expected by difxcalc.
         Run difxcalc with a single pointing center.
@@ -303,8 +303,11 @@ class CorrJob:
             ras = bbdata_0['tiedbeam_locations']['ra'][:]
         if decs is None:
             decs = bbdata_0['tiedbeam_locations']['dec'][:]
+        if source_names is None:
+            source_names = bbdata_0['tiedbeam_locations']['source_name'][:].decode()
         self.ras = np.atleast_1d(ras)
         self.decs = np.atleast_1d(decs)
+        self.source_names = np.atleast_1d(source_names)
         self.pointings = ac.SkyCoord(ra=self.ras.flatten() * un.deg, dec=self.decs.flatten() * un.deg)
 
         earliest_start_unix = np.inf
@@ -534,7 +537,8 @@ class CorrJob:
     dm = None,
     fscrunch = 4, 
     tscrunch = None,
-    vmin=0,vmax=2,
+    vmin=0,vmax=1,
+    xpad=None,
     bad_rfi_channels=None):
         wwfall = np.abs(wfall)**2
         wwfall -= np.nanmedian(wwfall,axis = -1)[:,:,None]
@@ -547,7 +551,9 @@ class CorrJob:
         for iiscan in range(t.shape[-1]):
             print(iiscan)
             f = plt.figure()
-            plt.imshow(sww[:,pointing] + sww[:,pointing+1],aspect = 'auto',vmin = vmin,vmax = vmax,interpolation = 'none')
+            waterfall=sww[:,pointing] + sww[:,pointing+1]
+            waterfall-=np.nanmedian(waterfall)
+            plt.imshow(waterfall,aspect = 'auto',vmin = vmin,vmax = vmax,interpolation = 'none')
 
             x_start = (t[iiref,:,pointing,iiscan]- bbdata_A['time0']['ctime'][:])/ (2.56e-6 * tscrunch)
             x_end = x_start + w[:,pointing,iiscan] / tscrunch
@@ -561,16 +567,19 @@ class CorrJob:
                 linestyle = '--'
             plt.plot(x_start, y/fscrunch,linestyle = linestyle,color = 'black',label='window',lw=1) # shade t
             plt.plot(x_end, y/fscrunch,linestyle = linestyle,color = 'black',lw=1) # shade t + w
+            if bad_rfi_channels is not None:
+                for channel in bad_rfi_channels:
+                    plt.axhline(channel/fscrunch,color='gray',alpha=.25)
             plt.plot(x_rminus, y/fscrunch,linestyle = '-.',color = 'red',label='integration',lw=1) # shade t + w/2 - r/2
             plt.plot(x_rplus, y/fscrunch,linestyle = '-.',color = 'red',lw=1) # shade t + w/2 + r/2
             plt.legend(loc='lower right')
             print(x_start)
             print(x_rminus)
             print(x_rplus)
-            xmin = np.min(t[iiref,:,pointing,:] - bbdata_A['time0']['ctime'][:,None],axis = -1) / (2.56e-6 * tscrunch)
-            xmax = np.max(t[iiref,:,pointing,:] - bbdata_A['time0']['ctime'][:,None],axis = -1) / (2.56e-6 * tscrunch)
-
-            #plt.xlim(np.median(xmin)-100,np.median(xmax)+100)
+            xmin = np.nanmin(t[iiref,:,pointing,:] - bbdata_A['time0']['ctime'][:,None],axis = -1) / (2.56e-6 * tscrunch)
+            xmax = np.nanmax(t[iiref,:,pointing,:] - bbdata_A['time0']['ctime'][:,None],axis = -1) / (2.56e-6 * tscrunch)
+            if xpad is not None:
+                plt.xlim(np.nanmedian(xmin)-xpad,np.nanmedian(xmax)+xpad)
             plt.ylim(1024 / fscrunch,0)
             plt.ylabel(f'Freq ID (0-1023) / {fscrunch:0.0f}')
             plt.xlabel(f'Time ({tscrunch:0.1f} frames)')
@@ -598,10 +607,13 @@ class CorrJob:
         pointing_centers = np.zeros((len(self.pointings),),dtype = output._dataset_dtypes['pointing'])
         pointing_centers['corr_ra'] = self.ras
         pointing_centers['corr_dec'] = self.decs
+        pointing_centers['source_name'] = self.source_names
         for iia in range(len(self.tel_names)):
             bbdata_a = BBData.from_file(self.bbdata_filepaths[iia])
             fill_waterfall(bbdata_a, write = True)
             indices_a = np.round((t_ij[iia] - bbdata_a['time0']['ctime'][:,None,None]) / 2.56e-6).astype(int) # shape is (nfreq, npointing, nscan)
+            print(indices_a)
+            print(w_ij)
             # there are scans with missing data: check the start and end index
             mask_a = (indices_a < 0) + (indices_a  + w_ij[None,:,:] > bbdata_a.ntime) 
             indices_a[mask_a] = int(bbdata_a.ntime // 2)
@@ -620,7 +632,6 @@ class CorrJob:
             int_time["duration_frames"][:] = w_ij
             int_time["dur_ratio"][:] = r_ij
             int_time["on_window"][:] = True
-            print('TODO: Specify on window in define_scan_params according to source type')
 
             output._from_ndarray_station(
                 event_id,
