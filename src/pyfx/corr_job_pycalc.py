@@ -62,56 +62,6 @@ def same_pointing(bbdata_a,bbdata_b):
     assert np.isclose(bbdata_a['tiedbeam_locations']['dec'][:],bbdata_b['tiedbeam_locations']['dec'][:]).all()
     return True
 
-def first_valid(arr, axis, invalid_val=0):
-    """Gets first valid element as a function of frequency axis.
-    arr : np.array 2d
-        Pass in np.isfinite(bbdata['tiedbeam_baseband'] as arr
-    
-    axis : int
-        To look for first nonzero element along e.g. the last axis pass in axis = -1.
-    
-    invalid_val : int
-        If no nonzero (i.e. invalid) elements,
-    """
-    mask = np.isfinite(arr).astype(bool)
-    return np.where(mask.any(axis=axis), mask.argmax(axis=axis), invalid_val)
-
-def duration(arr,axis = -1):
-    """Gets number of valid samples counted over the specified axis."""
-    return np.sum(np.isfinite(arr),axis = axis)
-
-def tw2twr(t,w):
-    """Converts from freq dependent w to freq dependent r. Here t is assumed to be an index; therefore it is quantized to integers."""
-    r_new = w / np.max(w) # one per frequency
-    w_new = np.max(w) # one per band
-    return t.astype(int), w_new.astype(int), r_new
-
-def get_twr_continuum(telA_bbdata,equal_duration = True):
-    """Return t,w,r by looking at the nan pattern in telA_bbdata, making use of ~all the data we have.
-    
-    This is an appropriate way to get the t,w,r data for a single phase-center pointing on a continuum source.
-
-    Inputs
-    ------
-    telA_bbdata : BBData
-    
-    equal_duration : bool
-        If equal_duration is set to True, we will make sure the integration time is the same across all frequencies.
-    
-    """
-    w = telA_bbdata['tiedbeam_baseband'][:,0] # both polarizations should have same nan pattern because Kotekan works in freq  time element order.
-    assert w.shape[0] == 1024
-    t_a = first_valid(w,axis = -1)
-    window = duration(w,axis = -1)
-    
-    if equal_duration:
-        window = np.zeros_like(window,dtype = int) + np.min(window)
-    
-    tt,ww,rr = tw2twr(t_a, window)
-    ww = np.atleast_2d(ww)
-    tt.shape = (1024,1,1)
-    rr.shape = (1024,1,1)
-    return tt,ww,rr
 
 def _ti0_even_spacing(bbdata_filename, ti0,  period_frames, num_scans_before = 0, num_scans_after = 'max',time_ordered = False):
     """
