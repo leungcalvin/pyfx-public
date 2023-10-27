@@ -64,7 +64,7 @@ def get_twr_continuum(telA_bbdata,equal_duration = True, pad = 2000):
     if equal_duration:
         good_lengths = (window[window > (w.shape[-1] // 2)]) # consider channels in which we have >1/2 the time samples
         window = np.zeros_like(window,dtype = int) + np.min(good_lengths) # take the minimum of that.
-    assert window - 2 * pad < 0, "twr params result in negative integration duration when zero-padded. Please optimize manually, e.g. decrease pad value or input twr manually."
+    assert (np.min(good_lengths) - 2 * pad > 0), "twr params result in negative integration duration when zero-padded. Please optimize manually, e.g. decrease pad value or input twr manually."
     tt,ww,rr =tw2twr(t_a + pad, window - 2 * pad)
     ww = np.atleast_2d(ww)
     tt.shape = (1024,1,1)
