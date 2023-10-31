@@ -1,17 +1,21 @@
+"""
+Fringestops station B to station A and cross correlates baseband data from station A and B. 
+The "core" module that should be called by the "outer layer" corr_job.py
+All bugs are the responsibility of Shion Andrew   
+"""
+
 import numpy as np
 from astropy.time import Time, TimeDelta
 from decimal import Decimal
 import astropy.units as un
 import time
-
 from pyfx.core_math import fft_corr
 from pyfx.core_math import max_lag_slice
 import collections
-
-#enable type hints for static tools
+from pycalc11 import Calc
 from baseband_analysis.core.bbdata import BBData
-from difxcalc_wrapper.io import IMReader
 from typing import Optional, Tuple, Union
+import logging
 
 K_DM = 1 / 2.41e-4  # in s MHz^2 / (pc cm^-3)
 
@@ -127,7 +131,7 @@ def crosscorr_core(
     t_a: np.ndarray,
     window: np.ndarray,
     R: np.ndarray,
-    calc_results: IMReader,
+    pycalc_results: Calc,
     DM: float,
     index_A: int,
     index_B: int,
@@ -136,8 +140,8 @@ def crosscorr_core(
     n_pol: int=2,
     complex_conjugate_convention: int=-1,
     intra_channel_sign: int=1,
-    fast: bool=True,
     weight: Optional[np.ndarray]=None,
+    fast:bool=False,
     zp: bool=True
     ) -> np.ndarray:
     """Fringestops, coherently dedisperses, and cross correlates data 
@@ -166,14 +170,14 @@ def crosscorr_core(
     n_pol : int
         number of polarizations in data -- always 2.
     
-    calc_results :
-        difxcalc-wrapper IMReader object, which is used to calculate geometric delays
+    pycalc_results :
+        pycalc11 Calc object, which is used to calculate geometric delays. Calc object should be initialized outside of this function and driver should have already been run (i.e. ci.run_driver())
     
     index_A :
-        where telescope A corresponds to in calc_results.
+        where telescope A corresponds to in pycalc_results.
     
     index_B :
-        where telescope B corresponds to in calc_results.
+        where telescope B corresponds to in pycalc_results.
     
     sample_rate :
         rate at which data is sampled in microseconds
@@ -187,6 +191,10 @@ def crosscorr_core(
     intra_channel_sign :
         a sign to account for a reflection of frequencies about zero (e.g. in iq/baseband data). Should be -1 if frequencies within a channel are reflected about 0, 1 otherwise. 
     
+    fast : 
+        if False, use astropy addition (high precision but slow) and subtraction to evaluate the geodelays as a function of time. 
+        If True, use float addition/subtraction; this should always be fine (picosecond precision) so long as pycalc_results.times[0] is within ~100s of all timestamps at which delays are to be evaluated.
+
     weight : 
         array of shape (nfreq, nscan, npointings,ntime) that specifies what weighting to apply to the data **relative to the start time given by t_a**.
         The shape of weight[:,jjscan,kkpointing] should be window[jjscan,kkpointing]
@@ -202,12 +210,10 @@ def crosscorr_core(
     n_pointings = bbdata_a["tiedbeam_baseband"].shape[1] // n_pol
     n_freq_B=len(bbdata_b.freq)
     assert n_freq_B==n_freq, f"There appear to be {n_freq} frequency channels in telescope A and {n_freq_B} frequency channels in telescope B. Please pass in these bbdata objects with frequency channels aligned (i.e. nth index along the frequency axis should correspond to the *same* channel in telescope A and B)"
-
     vis_shape = (n_freq, n_pointings, n_pol, n_pol, 2 * max_lag + 1,n_scan)
     cross_vis = np.zeros(vis_shape, dtype=bbdata_a['tiedbeam_baseband'].dtype)
     f0 = bbdata_a.index_map["freq"]["centre"] #shape is (nfreq)
     f0_b = bbdata_b.index_map["freq"]["centre"] #shape is (nfreq)
-    #assert np.max(f0-f0_b)==0, f"The frequency channels in telescope A and telescope B seem to be misaligned. Please pass in these bbdata objects with frequency channels aligned (i.e. nth index along the frequency axis should correspond to the *same* channel in telescope A and B)"
 
     for kkpointing in range(n_pointings):
         for jjscan in range(n_scan):
@@ -216,22 +222,26 @@ def crosscorr_core(
             t0_a = bbdata_a["time0"]["ctime"][:]
     
             # using telescope A times as reference time
-            if fast==True:
-                t0_a_offset=bbdata_a["time0"]["ctime_offset"][:] + t_a_indices * (sample_rate*1e-6)  # array of length 1024
-                start_times = Time(
-                    t0_a[0],
-                    val2=t0_a_offset[0],
-                    format="unix",
-                    precision=9,
-                )
-                delta_t=t0_a-t0_a[0]+t0_a_offset-t0_a_offset[0] #difference between reference start time and nth freqeucny start time
-                dt_vals=sample_rate * 1e-6 * np.arange(wij)+delta_t[:,np.newaxis]
-                geodelays_flattened = calc_results.baseline_delay(
-                    ant1=index_A, ant2=index_B, time=start_times, src=kkpointing,scan=0,
-                    dt=dt_vals
-                ) # difxcalc scan number should be zero (is distinct from pyfx scan number)!
-                geodelays = geodelays_flattened.reshape(dt_vals.shape)
-            else:
+            t0_a_offset=bbdata_a["time0"]["ctime_offset"][:] + t_a_indices * (sample_rate*1e-6)  # array of length 1024
+            
+            #start time of reference frequency channel
+            ref_start_time = Time(
+                t0_a[0],
+                val2=t0_a_offset[0],
+                format="unix",
+                precision=9,
+            )
+            delta_ctime=t0_a-t0_a[0]
+            delta_ctime_offset=t0_a_offset-t0_a_offset[0] #difference between reference start time and nth freqeucny start time
+            
+            if fast: #for the impatient
+                delta_t=delta_ctime+delta_ctime_offset
+                dt_vals=sample_rate * 1e-6 * np.arange(wij)+delta_t[:,np.newaxis] #nfreq,nframe
+                dt_vals0=(ref_start_time-pycalc_results.times[0]).sec #should always be <1s. 
+                delays_flattened=pycalc_results.delays_dt(dt_vals0+dt_vals.flatten())
+                geodelays_flattened=delays_flattened[:,0,index_B,:]-delays_flattened[:,0,index_A,:] #units of seconds
+                geodelays = geodelays_flattened.reshape(dt_vals.shape)*1e6 #microseconds #nfreq,nframe
+            else: #for the paranoid
                 t0_a_offset=bbdata_a["time0"]["ctime_offset"][:] # array of length 1024
                 start_times = Time(
                     t0_a,
@@ -243,8 +253,9 @@ def crosscorr_core(
                 for i in range(n_freq):
                     # the times we want to query for each frequency is an array of length wij times ranging from (ctime start times + t_a, ctime start times + t_a +w_ij)
                     query_times = start_times[i] + sample_rate*1e-6 * un.s * (t_a_indices[i]+np.arange(wij))
-                    geodelays[i,:]=calc_results.baseline_delay(
-                        ant1=index_A, ant2=index_B, time=query_times, src=kkpointing,scan=0)# difxcalc scan number should be zero (is distinct from pyfx scan number)!
+                    delays=pycalc_results.interpolate_delays(query_times)
+                    geodelays[i,:]=(delays[:,0,index_B,0]-delays[:,0,index_A,0])*1e6
+
             # Fringestopping B -> A
             scan_a, scan_b_fs = get_aligned_scans(
                 bbdata_a, bbdata_b, t_a_indices, wij, geodelays,
@@ -268,6 +279,7 @@ def crosscorr_core(
             r_jjscan=R[:,kkpointing,jjscan] #np array of size (nfreq)
 
             if len(np.unique(r_jjscan))==1:
+                #we can easily vectorize over frequency
                 r_ij=r_jjscan[0]
                 start = int((wij - wij*r_ij) // 2)
                 stop = int((wij + wij*r_ij) // 2)
@@ -275,13 +287,17 @@ def crosscorr_core(
                 ########## cross-correlate the on-signal ##############
                 for pol_0 in range(n_pol):
                     for pol_1 in range(n_pol):
+                        assert not np.isnan(np.min(scan_a_cd[:, pol_0, start:stop].flatten())), "Scan parameters have been poorly defined for telescope A. Please ensure there are no nans in the baseband data"
+                        assert not np.isnan(np.min(scan_b_fs_cd[:, pol_0, start:stop].flatten())), "Scan parameters have been poorly defined for telescope B. Please ensure there are no nans in the baseband data"
                         _vis = fft_corr(
                             scan_a_cd[:, pol_0, start:stop],
                             scan_b_fs_cd[:, pol_1, start:stop])
                         cross_vis[:, kkpointing, pol_0, pol_1,:,jjscan] = np.concatenate(
                             (_vis[:,:max_lag+1], _vis[:,-max_lag:]),axis=-1)
             else:
-                for r_ij in r_jjscan:
+                #loop over frequency channel
+                for freq in range(len(r_jjscan)):
+                    r_ij=r_jjscan[freq]
                     start = int((wij - wij*r_ij) // 2)
                     stop = int((wij + wij*r_ij) // 2)
                     #######################################################
@@ -289,11 +305,13 @@ def crosscorr_core(
                     for pol_0 in range(n_pol):
                         for pol_1 in range(n_pol):
                             if pol_0 == pol_1:
+                                assert not np.isnan(np.min(scan_a_cd[freq, pol_0, start:stop].flatten())), "Scan parameters have been poorly defined for telescope A. Please ensure there are no nans in the baseband data"
+                                assert not np.isnan(np.min(scan_b_fs_cd[freq, pol_0, start:stop].flatten())), "Scan parameters have been poorly defined for telescope B. Please ensure there are no nans in the baseband data"
                                 _vis = fft_corr(
-                                    scan_a_cd[:, pol_0, start:stop],
-                                    scan_b_fs_cd[:, pol_1, start:stop])
-                                cross_vis[:, kkpointing, pol_0, pol_1, :,jjscan] = np.concatenate(
-                                    (_vis[:,:max_lag+1], _vis[:,-max_lag:]),axis=-1)
+                                    scan_a_cd[freq, pol_0, start:stop],
+                                    scan_b_fs_cd[freq, pol_1, start:stop])
+                                cross_vis[freq, kkpointing, pol_0, pol_1, :,jjscan] = np.concatenate(
+                                    (_vis[freq,:max_lag+1], _vis[freq,-max_lag:]),axis=-1)
 
     return cross_vis
 

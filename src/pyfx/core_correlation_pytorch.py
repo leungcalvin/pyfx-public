@@ -1,18 +1,23 @@
+"""
+Identical to core_correlation, but uses gpus. Still W.I.P.
+Fringestops station B to station A and cross correlates baseband data from station A and B. 
+Written by Shion Andrew  
+"""
+
+
 import numpy as np
 from astropy.time import Time, TimeDelta
 from decimal import Decimal
 import astropy.units as un
 import time
-
 from pyfx.core_math_torch import fft_corr_gpu
-#from pyfx.core_math_c import fft_corr
 from pyfx.core_math import max_lag_slice
-
-#enable type hints for static tools
 from baseband_analysis.core.bbdata import BBData
-from difxcalc_wrapper.io import IMReader
-from typing import Optional, Tuple, Union
 import torch
+from pycalc11 import Calc
+import logging
+#enable type hints for static tools
+from typing import Optional, Tuple, Union
 
 K_DM = 1 / 2.41e-4  # in s MHz^2 / (pc cm^-3)
 
