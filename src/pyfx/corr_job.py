@@ -617,18 +617,18 @@ class CorrJob:
                                     n_pol = 2)
             # ...and replace with nans afterward.
             auto_vis += mask_a[:,:,None,None,None,:] * np.nan # fill with nans where
-            int_time = np.zeros(shape = t_ij[iia].shape, dtype = output._dataset_dtypes['time'])
-            int_time["ctime"][:] = t_ij[iia]
-            int_time["duration_frames"][:] = w_ij
-            int_time["dur_ratio"][:] = r_ij
-            int_time["on_window"][:] = True
-
+            ctime=bbdata_a['time0']['ctime']
+            ctime_offset=bbdata_a['time0']['ctime_offset']
             output._from_ndarray_station(
                 event_id,
                 telescope = self.telescopes[iia],
                 bbdata = bbdata_a,
                 auto = auto_vis,
-                integration_time = int_time,
+                ctime=ctime,
+                ctime_offset=ctime_offset,
+                t_a=indices_a,
+                window=w_ij,
+                r=r_ij,
                 )
             logging.info(f'Wrote autos for station {iia}')
 
@@ -657,14 +657,19 @@ class CorrJob:
                         fast = True,
                         weight = None
                     )
-                #logging.info('WARNING: iia <--> iib swapped in crosscorr_core')
                 output._from_ndarray_baseline(
                         event_id = event_id,
                         pointing_center = pointing_centers,
                         telescope_a = self.telescopes[iia],
                         telescope_b = self.telescopes[iib],
                         cross = vis,
-                    )
+                        ctime=ctime,
+                        ctime_offset=ctime_offset,
+                        t_a=indices_a,
+                        window=w_ij,
+                        r=r_ij,
+                        )
+
                 logging.info(f'Wrote visibilities for baseline {iia}-{iib}')
                 del bbdata_b # free up space in memory
             del bbdata_a
