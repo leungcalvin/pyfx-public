@@ -27,8 +27,8 @@ kko = ac.EarthLocation.from_geocentric(
     y = (-3581458.222+4.515) * un.m, 
     z = (4821611.987-3.078) * un.m) 
 telescopes = [chime,kko]
-    
 kko.info.name = 'kko'
+
 class VeryBasicBBData:
     def __init__(self,
         freq_ids,
