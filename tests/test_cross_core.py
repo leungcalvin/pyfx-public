@@ -55,7 +55,7 @@ class VeryBasicBBData:
         
 
 
-'''def test_autocorr_sim():
+def test_autocorr_sim():
     """Tests whether output of autocorr makes sense given "simulated" input data.
     Autocorrs should the same in both pols if the input is the same.
     Autocorrs should be the same with zp = False and zp = True (an optimization done around June 2023)
@@ -205,7 +205,7 @@ def test_continuum_calibrator():
     assert np.isclose(delays[1,1],-0.25078125,rtol=1e-05), "delays[1,1] wrong!" #should be good to sub nanosecond
     assert snrs[0,0]>=70, "fringe signal to noise is below expected value in 0,0 pol"
     assert snrs[1,1]>=54, "fringe signal to noise is below expected value in 1,1 pol"
-'''
+
 def test_pulsar():
     """Tests whether cross correlation of a pulsar yields expected results based on real data using pycalc in crosscorr_core. 
     Run this on CANFAR in a container containing pycalc, pyfx, and baseband-analysis.

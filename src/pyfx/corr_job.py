@@ -45,11 +45,10 @@ from baseband_analysis.core.sampling import fill_waterfall,_scrunch
 from pycalc11 import Calc
 from scipy.fft import fft, ifft, next_fast_len
 from scipy.stats import median_abs_deviation
-from pyfx import telescopes
 from decimal import Decimal
 from astropy.time import Time,TimeDelta
 import logging
-from pyfx.core_correlation_pycalc import autocorr_core, crosscorr_core
+from pyfx.core_correlation import autocorr_core, crosscorr_core
 from pyfx.bbdata_io import station_from_bbdata, get_all_time0, get_all_im_freq
 from coda.core import VLBIVis
 from typing import List
