@@ -23,7 +23,7 @@ def station_from_bbdata(bbdata):
                  'tone':'tone',
                  'gbo':'gbo'}
         for key in names.keys():
-            if key in bbdata.attrs['gain_cal_h5']:
+            if key in bbdata.attrs['cal_h5']:
                 return names[key]
     return 'algon' # because this is the weird child
 

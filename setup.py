@@ -21,8 +21,6 @@ setup(
         "h5py",
         "argparse",
         "astropy",
-        "baseband-analysis",
-        "difxcalc-wrapper",
     ],
     python_requires=">=3.6",
 )
