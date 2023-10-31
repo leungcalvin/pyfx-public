@@ -283,35 +283,40 @@ def crosscorr_core(
                 r_ij=r_jjscan[0]
                 start = int((wij - wij*r_ij) // 2)
                 stop = int((wij + wij*r_ij) // 2)
-                #######################################################
-                ########## cross-correlate the on-signal ##############
-                for pol_0 in range(n_pol):
-                    for pol_1 in range(n_pol):
-                        assert not np.isnan(np.min(scan_a_cd[:, pol_0, start:stop].flatten())), "Scan parameters have been poorly defined for telescope A. Please ensure there are no nans in the baseband data"
-                        assert not np.isnan(np.min(scan_b_fs_cd[:, pol_0, start:stop].flatten())), "Scan parameters have been poorly defined for telescope B. Please ensure there are no nans in the baseband data"
-                        _vis = fft_corr(
-                            scan_a_cd[:, pol_0, start:stop],
-                            scan_b_fs_cd[:, pol_1, start:stop])
-                        cross_vis[:, kkpointing, pol_0, pol_1,:,jjscan] = np.concatenate(
-                            (_vis[:,:max_lag+1], _vis[:,-max_lag:]),axis=-1)
+                if start==stop:
+                    logging.warning("r_ij includes less than 1 frame: visibilities will be set to 0")
+                else:
+                    #######################################################
+                    ########## cross-correlate the on-signal ##############
+                    for pol_0 in range(n_pol):
+                        for pol_1 in range(n_pol):
+                            assert not np.isnan(np.min(scan_a_cd[:, pol_0, start:stop].flatten())), "Scan parameters have been poorly defined for telescope A. Please ensure there are no nans in the baseband data"
+                            assert not np.isnan(np.min(scan_b_fs_cd[:, pol_0, start:stop].flatten())), "Scan parameters have been poorly defined for telescope B. Please ensure there are no nans in the baseband data"
+                            _vis = fft_corr(
+                                scan_a_cd[:, pol_0, start:stop],
+                                scan_b_fs_cd[:, pol_1, start:stop])
+                            cross_vis[:, kkpointing, pol_0, pol_1,:,jjscan] = np.concatenate(
+                                (_vis[:,:max_lag+1], _vis[:,-max_lag:]),axis=-1)
             else:
                 #loop over frequency channel
                 for freq in range(len(r_jjscan)):
                     r_ij=r_jjscan[freq]
                     start = int((wij - wij*r_ij) // 2)
                     stop = int((wij + wij*r_ij) // 2)
-                    #######################################################
-                    ########## cross-correlate the on-signal ##############
-                    for pol_0 in range(n_pol):
-                        for pol_1 in range(n_pol):
-                            if pol_0 == pol_1:
+                    if start==stop:
+                        logging.warning("r_ij includes less than 1 frame: visibilities for this channel will be set to 0")
+                    else:
+                        #######################################################
+                        ########## cross-correlate the on-signal ##############
+                        for pol_0 in range(n_pol):
+                            for pol_1 in range(n_pol):
                                 assert not np.isnan(np.min(scan_a_cd[freq, pol_0, start:stop].flatten())), "Scan parameters have been poorly defined for telescope A. Please ensure there are no nans in the baseband data"
                                 assert not np.isnan(np.min(scan_b_fs_cd[freq, pol_0, start:stop].flatten())), "Scan parameters have been poorly defined for telescope B. Please ensure there are no nans in the baseband data"
                                 _vis = fft_corr(
                                     scan_a_cd[freq, pol_0, start:stop],
                                     scan_b_fs_cd[freq, pol_1, start:stop])
                                 cross_vis[freq, kkpointing, pol_0, pol_1, :,jjscan] = np.concatenate(
-                                    (_vis[freq,:max_lag+1], _vis[freq,-max_lag:]),axis=-1)
+                                    (_vis[:max_lag+1], _vis[-max_lag:]),axis=-1)
 
     return cross_vis
 
@@ -470,7 +475,7 @@ def get_aligned_scans(
         correction_factor =wij / new_wij
         if correction_factor.any() > 2:
             # warn the user that the boundary conditions are sketch if we are missing e.g. more than half the data.
-            print("warning: based on specified start time and scan length, over half the data is missing from telescope XX.")
+            logging.warning("based on specified start time and scan length, over half the data is missing from telescope XX.")
 
         for i in range(len(pad_index_b)):
             aligned_b[i, ..., pad_index_b[i]:pad_index_b[i]+new_wij[i]] = \

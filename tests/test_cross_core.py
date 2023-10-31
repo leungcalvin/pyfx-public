@@ -138,44 +138,23 @@ def test_continuum_calibrator():
     weight=None
     start_time = np.min(time0)
     duration_min = 1
-    
-    try: # this is depreciated
-        srcs = ac.SkyCoord(
-        ra=ra,
-        dec=dec,
+
+    srcs = ac.SkyCoord(
+        ra=np.array([ra]),
+        dec=np.array([dec]),
         unit='deg',
         frame='icrs',
-        )
-        source_coords = [srcs]
-        source_names = [f"src{si}" for si in range(len(source_coords))]
-        ci = Calc(
-            station_names=telescope_names,
-            station_coords=telescopes,
-            source_names=source_names,
-            source_coords=source_coords,
-            time=start_time,
-            duration_min=duration_min,
-            base_mode='geocenter', 
-            dry_atm=False, 
-            wet_atm=False
-        )
-    except:
-        srcs = ac.SkyCoord(
-            ra=np.array([ra]),
-            dec=np.array([dec]),
-            unit='deg',
-            frame='icrs',
-        )
-        ci = Calc(
-            station_names=telescope_names,
-            station_coords=telescopes,
-            source_coords=srcs,
-            start_time=start_time,
-            duration_min=1,
-            base_mode='geocenter', 
-            dry_atm=False, 
-            wet_atm=False
-        )
+    )
+    ci = Calc(
+        station_names=telescope_names,
+        station_coords=telescopes,
+        source_coords=srcs,
+        start_time=start_time,
+        duration_min=1,
+        base_mode='geocenter', 
+        dry_atm=False, 
+        wet_atm=False
+    )
     ci.run_driver()
     cross=crosscorr_core(bbdata_a=chime_bbdata, bbdata_b=out_bbdata, t_a=t_a, window=window, R=R, pycalc_results=ci,DM=0,
                         index_A=0, index_B=1,sample_rate=2.56,max_lag=max_lag,n_pol=2,
@@ -205,6 +184,7 @@ def test_continuum_calibrator():
     assert np.isclose(delays[1,1],-0.25078125,rtol=1e-05), "delays[1,1] wrong!" #should be good to sub nanosecond
     assert snrs[0,0]>=70, "fringe signal to noise is below expected value in 0,0 pol"
     assert snrs[1,1]>=54, "fringe signal to noise is below expected value in 1,1 pol"
+    
 
 def test_pulsar():
     """Tests whether cross correlation of a pulsar yields expected results based on real data using pycalc in crosscorr_core. 
@@ -237,51 +217,28 @@ def test_pulsar():
     max_lag=100
 
     t_a=np.ones((1024,nscan,npointing),int)*25310
-    R=np.ones((1024,nscan,npointing),int)
-
+    R=np.ones((1024,nscan,npointing),float)
     window=np.ones((nscan,npointing),int)
     window*=761
     weight=None
     start_time = np.min(time0)
     duration_min = 1
-    
-    try: # this is depreciated
-        srcs = ac.SkyCoord(
-        ra=ra,
-        dec=dec,
+    srcs = ac.SkyCoord(
+        ra=np.array([ra]),
+        dec=np.array([dec]),
         unit='deg',
         frame='icrs',
-        )
-        source_coords = [srcs]
-        source_names = [f"src{si}" for si in range(len(source_coords))]
-        ci = Calc(
-            station_names=telescope_names,
-            station_coords=telescopes,
-            source_names=source_names,
-            source_coords=source_coords,
-            time=start_time,
-            duration_min=duration_min,
-            base_mode='geocenter', 
-            dry_atm=False, 
-            wet_atm=False
-        )
-    except:
-        srcs = ac.SkyCoord(
-            ra=np.array([ra]),
-            dec=np.array([dec]),
-            unit='deg',
-            frame='icrs',
-        )
-        ci = Calc(
-            station_names=telescope_names,
-            station_coords=telescopes,
-            source_coords=srcs,
-            start_time=start_time,
-            duration_min=1,
-            base_mode='geocenter', 
-            dry_atm=False, 
-            wet_atm=False
-        )
+    )
+    ci = Calc(
+        station_names=telescope_names,
+        station_coords=telescopes,
+        source_coords=srcs,
+        start_time=start_time,
+        duration_min=1,
+        base_mode='geocenter', 
+        dry_atm=False, 
+        wet_atm=False
+    )
     ci.run_driver()
     cross=crosscorr_core(bbdata_a=chime_bbdata, bbdata_b=out_bbdata, t_a=t_a, window=window, R=R, pycalc_results=ci,DM=57.1,
                         index_A=0, index_B=1,sample_rate=2.56,max_lag=max_lag,n_pol=2,
@@ -306,8 +263,8 @@ def test_pulsar():
     assert peaklag_11 == 0, "frame lag nonzero!"
 
     delays, snrs = extract_subframe_delay(cross[:,0,:,:,:,0])
-    assert np.isclose(delays[0,0],-0.21765625,rtol=1e-04), "delays[0,0] wrong!" #should be good to sub nanosecond
-    assert np.isclose(delays[1,1],-0.21578125,rtol=1e-04), "delays[1,1] wrong!" #should be good to sub nanosecond
+    assert np.isclose(delays[0,0],-0.21765625,rtol=1e-04), f"delays[0,0] wrong! Delays evaluated to be {delays}" #should be good to sub nanosecond
+    assert np.isclose(delays[1,1],-0.21578125,rtol=1e-04), f"delays[1,1] wrong! Delays evaluated to be {delays}" #should be good to sub nanosecond
     assert snrs[0,0]>=39, "fringe signal to noise is below expected value in 0,0 pol"
     assert snrs[1,1]>=30, "fringe signal to noise is below expected value in 0,0 pol"
     print('test_pulsar_pycalc() snr:',snrs)
@@ -385,5 +342,3 @@ def test_pulsar_pycalc_corrjob():
     assert snrs_pycalc[0,0]>=37, f"fringe signal to noise is below expected value in 0,0 pol, got {snrs_pycalc[0,0]}"
     assert snrs_pycalc[1,1]>=27, f"fringe signal to noise is below expected value in 1,1 pol, got {snrs_pycalc[1,1]}"
     
-
-
