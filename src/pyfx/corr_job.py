@@ -617,16 +617,15 @@ class CorrJob:
                                     n_pol = 2)
             # ...and replace with nans afterward.
             auto_vis += mask_a[:,:,None,None,None,:] * np.nan # fill with nans where
-            ctime=bbdata_a['time0']['ctime']
-            ctime_offset=bbdata_a['time0']['ctime_offset']
+            t_a=bbdata_a['time0']['ctime'][:,np.newaxis,np.newaxis]*np.ones(indices_a.shape)
+            t_a_offset=bbdata_a['time0']['ctime_offset'][:,np.newaxis,np.newaxis]+indices_a*2.56e-6
             output._from_ndarray_station(
                 event_id,
                 telescope = self.telescopes[iia],
                 bbdata = bbdata_a,
                 auto = auto_vis,
-                ctime=ctime,
-                ctime_offset=ctime_offset,
-                t_a=indices_a,
+                t_a=t_a,
+                t_a_offset=t_a_offset,
                 window=w_ij,
                 r=r_ij,
                 )
@@ -657,15 +656,15 @@ class CorrJob:
                         fast = True,
                         weight = None
                     )
+
                 output._from_ndarray_baseline(
                         event_id = event_id,
                         pointing_center = pointing_centers,
                         telescope_a = self.telescopes[iia],
                         telescope_b = self.telescopes[iib],
                         cross = vis,
-                        ctime=ctime,
-                        ctime_offset=ctime_offset,
-                        t_a=indices_a,
+                        t_a=t_a,
+                        t_a_offset=t_a_offset,
                         window=w_ij,
                         r=r_ij,
                         )
