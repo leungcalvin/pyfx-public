@@ -18,7 +18,7 @@ from typing import Optional, Tuple, Union
 import logging
 
 K_DM = 1 / 2.41e-4  # in s MHz^2 / (pc cm^-3)
-MAX_FRAC_SAMP_LENGTH=32187 #maximum FFT length, chosen to keep delay rate drift (on Earth) within 1/10th of a frame 
+MAX_FRAC_SAMP_LENGTH=3218700 #maximum FFT length, chosen to keep delay rate drift (on Earth) within 1/10th of a frame 
 
 
 def autocorr_core(
@@ -157,7 +157,7 @@ def get_start_times(
         format="unix",
         precision=9,
     )
-    if geocenter:
+    if False:#geocenter:
         dt_vals0=(t0_a-pycalc_results.times[0].unix) #should always be <50s. 
         dt_vals0+=t0_a_offset
         delays_flattened=pycalc_results.delays_dt(dt_vals0) #shape 1024
@@ -208,11 +208,13 @@ def crosscorr_core(
     index_A: int,
     index_B: int,
     max_lag: int,
+    bbdata_top: Optional[BBData]=None,
     ref_frame:Optional[int]=None,
     sample_rate: float=2.56,
     n_pol: int=2,
     complex_conjugate_convention: int=-1,
     intra_channel_sign: int=1,
+    old: bool=False,
     weight: Optional[np.ndarray]=None,
     fast:bool=True,
     zp: bool=True,
@@ -240,6 +242,9 @@ def crosscorr_core(
     max_lag : int
         maximum (absolute value) lag (in frames) for auto-correlation (useful for very long time series data). TODO: Outer layer of the code should check that this is less than 1/2 of the window size times R.
         set this to 20 for a good balance between space efficiency and good noise statistics.
+    
+    bbdata_top : BBData object
+        bbdata defining topocentric time, if not BBdata A
 
     ref_frame : int
         Index (e.g. index_A, index_B) corresponding to reference frame in which data will be fringestopped to. 0 corresponds to the geocenter. If None, will default to index_A. 
@@ -294,13 +299,15 @@ def crosscorr_core(
     geocenter=False
     if ref_frame is None:
         geocenter=True
+    if bbdata_top is None:
+        bbdata_top=bbdata_a
 
     for kkpointing in range(n_pointings):
         for jjscan in range(n_scan):
             wij=window[kkpointing,jjscan]
             t_a_indices = t_a[:, kkpointing, jjscan]  # array of length 1024
 
-            ref_start_time,ref_start_time_offset=get_start_times(bbdata_a=bbdata_a,
+            ref_start_time,ref_start_time_offset=get_start_times(bbdata_a=bbdata_top,
                             t_a_indices=t_a_indices,
                             pycalc_results=pycalc_results,
                             index_A=index_A,
@@ -332,7 +339,8 @@ def crosscorr_core(
                 npointing=kkpointing,n_pol=n_pol,zp=zp,max_frames=max_frames
             )
             ### DELETE THIS ####
-            scan_a, scan_b = get_aligned_scans(
+            if old:
+                scan_a_fs, scan_b_fs = get_aligned_scans(
                             bbdata_a, bbdata_b, t_a_indices, wij, geodelaysB,
                             complex_conjugate_convention=complex_conjugate_convention, intra_channel_sign=intra_channel_sign, sample_rate=sample_rate,
                             npointing=kkpointing,n_pol=n_pol,zp=zp
@@ -487,8 +495,8 @@ def frac_samp_shift(
         n1=n//2
         data_chunk1=data[:,:,:n1]
         data_chunk2=data[:,:,n1:]
-        sub_frame_tau1=sub_frame_tau[:n1]
-        sub_frame_tau2=sub_frame_tau[n1:]
+        sub_frame_tau1=sub_frame_tau[:,:n1]
+        sub_frame_tau2=sub_frame_tau[:,n1:]
         fft_corrected_chunk1=frac_samp_shift(
             data=data_chunk1,
             f0=f0,
@@ -606,9 +614,6 @@ def fringestop_scan(
     ## B: |----|----|----|----|----|    ##
     
     # find out the index corresponding to the frame number closest in time to ref_start_time
-
-    closest_index=(ref_start_time-bbdata["time0"]["ctime"][:])/(sample_rate*1e-6) #frames
-
     ref_Time= Time(
         ref_start_time,
         val2=ref_start_time_offset,
@@ -619,18 +624,18 @@ def fringestop_scan(
         val2=bbdata["time0"]["ctime_offset"][:],
         format="unix",
         precision=9)
-    integer_frame_start=np.round((tel_Time-ref_Time).to_value('sec')/(sample_rate*1e-6)).astype(int) #frames
+    integer_frame_start=np.round((ref_Time-tel_Time).to_value('sec')/(sample_rate*1e-6)).astype(int) #frames
     tel_Time_we_have= Time(
         bbdata["time0"]["ctime"][:],
         val2=bbdata["time0"]["ctime_offset"][:]+integer_frame_start*sample_rate*1e-6,
         format="unix",
         precision=9)
     delta_A_B=(tel_Time_we_have-ref_Time).to_value('sec') #this is actually not that time consuming for 1024 frequencies
-    
+    print(delta_A_B)
     int_delay = np.array([int(np.round((tel_time*1e-6 - frame_offset) / (sample_rate*1e-6)))
                          for tel_time, frame_offset, in zip(relative_start_time_we_want, delta_A_B)])
     # frame number closest to start time
-
+    print(int_delay)
     start_index_we_want_at_b = int_delay+integer_frame_start
 
     if not zp:
@@ -666,6 +671,8 @@ def fringestop_scan(
         time_we_have_at_b = (delta_A_B+int_delay*sample_rate*1e-6)  # s
         sub_frame_tau = np.array([geodelays[i, :wij] - time_b*1e6 for time_b, i in zip(
         time_we_have_at_b, range(len(geodelays)))])  # sub-frame delay at start time in mircoseconds
+        print("time_we_have_at_b correct")
+        print(time_we_have_at_b)
         print("sub_frame_tau")
         print(sub_frame_tau)
         aligned_bbdata = frac_samp_shift(aligned_bbdata,
@@ -818,7 +825,9 @@ def get_aligned_scans(
     time_we_have_at_b = (delta_A_B+int_delay*sample_rate*1e-6)  # s
     sub_frame_tau = np.array([tau[i, :wij] - time_b*1e6 for time_b, i in zip(
         time_we_have_at_b, range(len(tau)))])  # sub-frame delay at start time in mircoseconds
-    print("sub_frame_tau")
+    print("time_we_have_at_b correct")
+    print(time_we_have_at_b)
+    print("sub_frame_tau correct")
     print(sub_frame_tau)
     aligned_b = frac_samp_shift(aligned_b,
                                            f0=bbdata_b.index_map["freq"]["centre"][:],
