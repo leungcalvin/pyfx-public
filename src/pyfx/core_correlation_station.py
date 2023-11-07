@@ -170,7 +170,7 @@ def get_delays(
     t0_a, t0_a_offset - np.ndarray
         Recorded unix timestamps (ctime and ctime_offset)
     """
-    if False: #ref_frame==telescope_index:
+    if ref_frame==telescope_index:
         return np.zeros((ref_start_time.shape[0],wij)) #save time   
     delta_ctime=ref_start_time-ref_start_time[0]
     delta_ctime_offset=ref_start_time_offset-ref_start_time_offset[0]
@@ -187,9 +187,7 @@ def get_delays(
     #if ref_frame is None: #delays are relative to the geocenter
     #    geodelays_flattened=delays_flattened[:,0,telescope_index,:]
     #else:
-    if True: #if geocenter: 
-        geodelays_flattened=delays_flattened[:,0,telescope_index,:]
-    #geodelays_flattened=delays_flattened[:,0,telescope_index,:]-delays_flattened[:,0,ref_frame,:] #units of seconds
+    geodelays_flattened=delays_flattened[:,0,telescope_index,:]-delays_flattened[:,0,ref_frame,:] #units of seconds
     geodelays = geodelays_flattened.reshape(dt_vals.shape)*1e6 #microseconds #nfreq,nframe
     return geodelays
 
