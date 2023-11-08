@@ -1,16 +1,10 @@
 #import pytest
 import numpy as np
 import os
-#from pyfx.core_correlation import autocorr_core
-from pyfx.core_correlation_pycalc import crosscorr_core
-#from pyfx.core_correlation import crosscorr_core as crosscorr_core_no_pycalc
+from pyfx.core_correlation import crosscorr_core, autocorr_core
 from pyfx.core_vis import extract_subframe_delay, extract_frame_delay
-#import pyfx.core_correlation as core_correlation
-#from pyfx.telescopes import tel_from_name
+from pyfx import corr_job as corr_job
 
-
-#import difxcalc_wrapper.runner as dcr
-#from difxcalc_wrapper.io import make_calc
 from baseband_analysis.core.sampling import fill_waterfall
 from baseband_analysis.core.dedispersion import coherent_dedisp
 import astropy.coordinates as ac
@@ -19,9 +13,7 @@ import astropy.units as un
 from astropy.time import Time
 import scipy
 from pycalc11 import Calc
-
-DIFXCALC_CMD = "/lib/difxcalc11/build/bin/difxcalc"
-DIFXCALC_SCRATCH_DIR = "/arc/projects/chime_frb/vlbi/scratch"
+import logging
 
 
 chime = ac.EarthLocation.from_geocentric(
@@ -35,8 +27,8 @@ kko = ac.EarthLocation.from_geocentric(
     y = (-3581458.222+4.515) * un.m, 
     z = (4821611.987-3.078) * un.m) 
 telescopes = [chime,kko]
-    
 kko.info.name = 'kko'
+
 class VeryBasicBBData:
     def __init__(self,
         freq_ids,
@@ -61,6 +53,8 @@ class VeryBasicBBData:
                 "ctime_offset": self.ctime_offset
             }
         
+
+
 def test_autocorr_sim():
     """Tests whether output of autocorr makes sense given "simulated" input data.
     Autocorrs should the same in both pols if the input is the same.
@@ -93,109 +87,7 @@ def test_autocorr_sim():
 
 def test_continuum_calibrator():
     """Tests whether cross correlation of a continuum source yields expected results based on real data.
-    Run this on CANFAR in a container containing difxcalc-wrapper, pyfx, and baseband-analysis.
-    In August 2023 we upgraded from difxcalc-wrapper to pycalc and deprecated difxcalc-wrapper, so this test could potentially be deprecated after ~Feb 2024. Ask Calvin or Shion.
-    """
-    chime_file='/arc/projects/chime_frb/shiona/public/pyfx_test_files/J0117+8928_chime.h5'
-    kko_file='/arc/projects/chime_frb/shiona/public/pyfx_test_files/J0117+8928_kko.h5'
-    chime_bbdata = BBData.from_file(chime_file)
-    out_bbdata = BBData.from_file(kko_file)
-
-    fill_waterfall(chime_bbdata, write=True)
-    fill_waterfall(out_bbdata, write=True)
-    
-    ra_telA = np.array(chime_bbdata["tiedbeam_locations"]["ra"][0])
-    dec_telA = np.array(chime_bbdata["tiedbeam_locations"]["dec"][0])
-    ra_telB = np.array(out_bbdata["tiedbeam_locations"]["ra"][0])
-    dec_telB = np.array(out_bbdata["tiedbeam_locations"]["dec"][0])
-    assert np.isclose(
-        ra_telA, out_bbdata["tiedbeam_locations"]["ra"][0], rtol=5 / 60
-    ), "tiedbeam pointings are not the same"  # should be consistent to 5 arcmin
-    assert np.isclose(
-        dec_telA, out_bbdata["tiedbeam_locations"]["dec"][0], rtol=5 / 60
-    ), "tiedbeam pointings are not the same"  # should be consistent to 5 arcmin
-
-    ra = ra_telA
-    dec = dec_telA
-
-    sources = [ac.SkyCoord(ra=ra * un.degree, dec=dec * un.degree, frame="icrs")]
-
-    time0 = Time(
-        chime_bbdata["time0"]["ctime"],
-        val2=chime_bbdata["time0"]["ctime_offset"],
-        format="unix",
-        precision=9,
-    )
-    sweep_duration_frames = (
-        chime_bbdata["time0"]["fpga_count"][-1] - chime_bbdata["time0"]["fpga_count"][0]
-    )
-    duration_sec = int(
-        2.56e-6 * (chime_bbdata.ntime + sweep_duration_frames) + 50
-    )
-    calc_filename = f"{chime_bbdata.attrs['event_id']}_{len(sources)}_sources"
-    calcfile = os.path.join(DIFXCALC_SCRATCH_DIR, calc_filename + ".calc")
-    calc_params = make_calc(
-        telescopes=telescopes,
-        sources=sources,
-        time=min(time0)
-        - 20
-        * un.s,
-        duration_sec=duration_sec,
-        ofile_name=calcfile,
-    )
-
-    calcresults = dcr.run_difxcalc(
-        calcfile,
-        sources=sources,
-        difxcalc_cmd=DIFXCALC_CMD,
-        remove_calcfile=False,
-        force=True,
-    )
-
-    nscan=1
-    npointing=1
-    max_lag=100
-    t_a=np.zeros((1024,npointing,nscan),int)
-    R=np.ones((1024,npointing,nscan),int)
-    window=np.ones((npointing,nscan),int)
-
-    ntime=len(chime_bbdata["tiedbeam_baseband"][nscan][0])
-    window *= ntime  # set to 1000 for smaller test, max 43670
-    
-    weight=None
-    cross=crosscorr_core_no_pycalc(bbdata_a=chime_bbdata, bbdata_b=out_bbdata, t_a=t_a, window=window, R=R, calc_results=calcresults,DM=0,
-                        index_A=0, index_B=1,sample_rate=2.56,max_lag=max_lag,n_pol=2,
-                        weight=weight)
-
-    ### rfi flagging
-    cutoff_00=np.median(np.median(np.abs(cross[:,0,0,0,:,0])**2,axis=-1))+1*scipy.stats.median_abs_deviation(np.median(np.abs(cross[:,0,0,0,:,0])**2,axis=-1))
-    cutoff_11=np.median(np.median(np.abs(cross[:,0,1,1,:,0])**2,axis=-1))+1*scipy.stats.median_abs_deviation(np.median(np.abs(cross[:,0,1,1,:,0])**2,axis=-1))
-    for iifreq in range(len(cross)):
-        val_00=np.median(np.abs(cross[iifreq,0,0,0,:,0])**2,axis=-1)
-        val_11=np.median(np.abs(cross[iifreq,0,1,1,:,0])**2,axis=-1)
-        if val_00 > cutoff_00:
-            cross[iifreq,0,0,0,:,0] *=0
-        if val_11 > cutoff_11:
-            cross[iifreq,0,1,1,:,0] *=0        
-
-    peaklags= extract_frame_delay(
-            cross[:,0,:,:,:,0])  
-    peaklag_00=peaklags[0]
-    peaklag_11=peaklags[1]
-
-    assert peaklag_00 == 0, "frame lag nonzero!"
-    assert peaklag_11 == 0, "frame lag nonzero!"
-
-    delays, snrs = extract_subframe_delay(cross[:,0,:,:,:,0])
-    assert np.isclose(delays[0,0],-0.2521875,rtol=1e-05), "delays[0,0] wrong!" #should be good to sub nanosecond
-    assert np.isclose(delays[1,1],-0.25078125,rtol=1e-05), "delays[1,1] wrong!" #should be good to sub nanosecond
-    assert snrs[0,0]>=70, "fringe signal to noise is below expected value in 0,0 pol"
-    assert snrs[1,1]>=54, "fringe signal to noise is below expected value in 1,1 pol"
-
-def test_continuum_calibrator_pycalc():
-    """Tests whether cross correlation of a continuum source yields expected results based on real data.
-    This is the same as test_continuum_calibrator() but using pycalc instead of difxcalc-wrapper.
-    Run this on CANFAR in a container containing difxcalc-wrapper, pyfx, and baseband-analysis.
+    Run this on CANFAR in a container containing pycalc, pyfx, and baseband-analysis.
     """
     telescopes = [chime,kko]
     telescope_names=['chime','kko']
@@ -203,7 +95,7 @@ def test_continuum_calibrator_pycalc():
     kko_file='/arc/projects/chime_frb/shiona/public/pyfx_test_files/J0117+8928_kko.h5'
     chime_bbdata = BBData.from_file(chime_file)
     out_bbdata = BBData.from_file(kko_file)
-
+    
     fill_waterfall(chime_bbdata, write=True)
     fill_waterfall(out_bbdata, write=True)
     
@@ -246,44 +138,23 @@ def test_continuum_calibrator_pycalc():
     weight=None
     start_time = np.min(time0)
     duration_min = 1
-    
-    try: # this is depreciated
-        srcs = ac.SkyCoord(
-        ra=ra,
-        dec=dec,
+
+    srcs = ac.SkyCoord(
+        ra=np.array([ra]),
+        dec=np.array([dec]),
         unit='deg',
         frame='icrs',
-        )
-        source_coords = [srcs]
-        source_names = [f"src{si}" for si in range(len(source_coords))]
-        ci = Calc(
-            station_names=telescope_names,
-            station_coords=telescopes,
-            source_names=source_names,
-            source_coords=source_coords,
-            time=start_time,
-            duration_min=duration_min,
-            base_mode='geocenter', 
-            dry_atm=False, 
-            wet_atm=False
-        )
-    except:
-        srcs = ac.SkyCoord(
-            ra=np.array([ra]),
-            dec=np.array([dec]),
-            unit='deg',
-            frame='icrs',
-        )
-        ci = Calc(
-            station_names=telescope_names,
-            station_coords=telescopes,
-            source_coords=srcs,
-            start_time=start_time,
-            duration_min=1,
-            base_mode='geocenter', 
-            dry_atm=False, 
-            wet_atm=False
-        )
+    )
+    ci = Calc(
+        station_names=telescope_names,
+        station_coords=telescopes,
+        source_coords=srcs,
+        start_time=start_time,
+        duration_min=1,
+        base_mode='geocenter', 
+        dry_atm=False, 
+        wet_atm=False
+    )
     ci.run_driver()
     cross=crosscorr_core(bbdata_a=chime_bbdata, bbdata_b=out_bbdata, t_a=t_a, window=window, R=R, pycalc_results=ci,DM=0,
                         index_A=0, index_B=1,sample_rate=2.56,max_lag=max_lag,n_pol=2,
@@ -313,106 +184,10 @@ def test_continuum_calibrator_pycalc():
     assert np.isclose(delays[1,1],-0.25078125,rtol=1e-05), "delays[1,1] wrong!" #should be good to sub nanosecond
     assert snrs[0,0]>=70, "fringe signal to noise is below expected value in 0,0 pol"
     assert snrs[1,1]>=54, "fringe signal to noise is below expected value in 1,1 pol"
-
+    
 
 def test_pulsar():
-    """Tests whether cross correlation of a pulsar yields expected results based on real data using difxcalc-wrapper in crosscorr_core.
-    Run this on CANFAR in a container containing difxcalc-wrapper, pyfx, and baseband-analysis.
-    In August 2023 we upgraded from difxcalc-wrapper to pycalc and deprecated difxcalc-wrapper, so this test could potentially be deprecated after ~Feb 2024. Ask Calvin or Shion.
-     """
-
-    #tests whether cross correlation of a pulsar yields expected results based on real data
-    telescopes = [chime,kko]
-    chime_file='/arc/projects/chime_frb/shiona/public/pyfx_test_files/304050301_target_B0355+54_chime.h5'
-    kko_file='/arc/projects/chime_frb/shiona/public/pyfx_test_files/304050301_target_B0355+54_kko.h5'
-    chime_bbdata = BBData.from_file(chime_file)
-    out_bbdata = BBData.from_file(kko_file)
-    fill_waterfall(chime_bbdata, write=True)
-    fill_waterfall(out_bbdata, write=True)
-    ra=chime_bbdata['tiedbeam_locations']['ra'][0]
-    dec=chime_bbdata['tiedbeam_locations']['dec'][0]
-
-    DM=57.1
-
-    sources = ac.SkyCoord(ra=np.atleast_1d(ra) * un.degree, dec=np.atleast_1d(dec) * un.degree, frame="icrs")
-
-    time0 = Time(
-        chime_bbdata["time0"]["ctime"],
-        val2=chime_bbdata["time0"]["ctime_offset"],
-        format="unix",
-        precision=9,
-    )
-    sweep_duration_frames = (
-        chime_bbdata["time0"]["fpga_count"][-1] - chime_bbdata["time0"]["fpga_count"][0]
-    )
-    duration_sec = int(
-        2.56e-6 * (chime_bbdata.ntime + sweep_duration_frames) + 50
-    )
-    calc_filename = f"{chime_bbdata.attrs['event_id']}_{len(sources)}_sources"
-    calcfile = os.path.join(DIFXCALC_SCRATCH_DIR, calc_filename + ".calc")
-    calc_params = make_calc(
-        telescopes=telescopes,
-        sources=sources,
-        time=min(time0)
-        - 20
-        * un.s,
-        duration_sec=duration_sec,
-        ofile_name=calcfile,
-    )
-
-    calcresults = dcr.run_difxcalc(
-        calcfile,
-        sources=sources,
-        difxcalc_cmd=DIFXCALC_CMD,
-        remove_calcfile=False,
-        force=True,
-    )
-
-    nscan=1
-    npointing=1
-    max_lag=100
-
-    t_a=np.ones((1024,nscan,npointing),int)*25310
-    R=np.ones((1024,nscan,npointing),int)
-
-    window=np.ones((nscan,npointing),int)
-    window*=761
-    weight=None
-
-    # No pycalc
-    cross=crosscorr_core_no_pycalc(bbdata_a=chime_bbdata, bbdata_b=out_bbdata, t_a=t_a, window=window, R=R, 
-                        calc_results=calcresults,DM=DM,
-                        index_A=0, index_B=1,sample_rate=2.56,max_lag=max_lag,n_pol=2,
-                        weight=weight,fast=True)
-
-    ### rfi flagging
-    cutoff_00=np.median(np.median(np.abs(cross[:,0,0,0,:,0])**2,axis=-1))+1*scipy.stats.median_abs_deviation(np.median(np.abs(cross[:,0,0,0,:,0])**2,axis=-1))
-    cutoff_11=np.median(np.median(np.abs(cross[:,0,1,1,:,0])**2,axis=-1))+1*scipy.stats.median_abs_deviation(np.median(np.abs(cross[:,0,1,1,:,0])**2,axis=-1))
-    for ifreq in range(len(cross)):
-        val_00=np.median(np.abs(cross[ifreq,0,0,0,:,0])**2,axis=-1)
-        val_11=np.median(np.abs(cross[ifreq,0,1,1,:,0])**2,axis=-1)
-        if val_00 > cutoff_00:
-            cross[ifreq,0,0,0,:,0] *=0
-        if val_11 > cutoff_11:
-            cross[ifreq,0,1,1,:,0] *=0        
-
-    peaklags= extract_frame_delay(
-            cross[:,0,:,:,:,0])  
-    peaklag_00=peaklags[0]
-    peaklag_11=peaklags[1]
-    assert peaklag_00 == 0, "frame lag nonzero!"
-    assert peaklag_11 == 0, "frame lag nonzero!"
-
-    delays, snrs = extract_subframe_delay(cross[:,0,:,:,:,0])
-    assert np.isclose(delays[0,0],-0.21765625,rtol=1e-04), "delays[0,0] wrong!" #should be good to sub nanosecond
-    assert np.isclose(delays[1,1],-0.21578125,rtol=1e-04), "delays[1,1] wrong!" #should be good to sub nanosecond
-    assert snrs[0,0]>=39, "fringe signal to noise is below expected value in 0,0 pol"
-    assert snrs[1,1]>=30, "fringe signal to noise is below expected value in 0,0 pol"
-    print('test_pulsar() snr:',snrs)
-
-def test_pulsar_pycalc():
     """Tests whether cross correlation of a pulsar yields expected results based on real data using pycalc in crosscorr_core. 
-    Same as test_pulsar() but using pycalc instead of difxcalc-wrapper in the crosscorr_core layer.
     Run this on CANFAR in a container containing pycalc, pyfx, and baseband-analysis.
     """
     telescopes = [chime,kko]
@@ -442,51 +217,28 @@ def test_pulsar_pycalc():
     max_lag=100
 
     t_a=np.ones((1024,nscan,npointing),int)*25310
-    R=np.ones((1024,nscan,npointing),int)
-
+    R=np.ones((1024,nscan,npointing),float)
     window=np.ones((nscan,npointing),int)
     window*=761
     weight=None
     start_time = np.min(time0)
     duration_min = 1
-    
-    try: # this is depreciated
-        srcs = ac.SkyCoord(
-        ra=ra,
-        dec=dec,
+    srcs = ac.SkyCoord(
+        ra=np.array([ra]),
+        dec=np.array([dec]),
         unit='deg',
         frame='icrs',
-        )
-        source_coords = [srcs]
-        source_names = [f"src{si}" for si in range(len(source_coords))]
-        ci = Calc(
-            station_names=telescope_names,
-            station_coords=telescopes,
-            source_names=source_names,
-            source_coords=source_coords,
-            time=start_time,
-            duration_min=duration_min,
-            base_mode='geocenter', 
-            dry_atm=False, 
-            wet_atm=False
-        )
-    except:
-        srcs = ac.SkyCoord(
-            ra=np.array([ra]),
-            dec=np.array([dec]),
-            unit='deg',
-            frame='icrs',
-        )
-        ci = Calc(
-            station_names=telescope_names,
-            station_coords=telescopes,
-            source_coords=srcs,
-            start_time=start_time,
-            duration_min=1,
-            base_mode='geocenter', 
-            dry_atm=False, 
-            wet_atm=False
-        )
+    )
+    ci = Calc(
+        station_names=telescope_names,
+        station_coords=telescopes,
+        source_coords=srcs,
+        start_time=start_time,
+        duration_min=1,
+        base_mode='geocenter', 
+        dry_atm=False, 
+        wet_atm=False
+    )
     ci.run_driver()
     cross=crosscorr_core(bbdata_a=chime_bbdata, bbdata_b=out_bbdata, t_a=t_a, window=window, R=R, pycalc_results=ci,DM=57.1,
                         index_A=0, index_B=1,sample_rate=2.56,max_lag=max_lag,n_pol=2,
@@ -511,18 +263,19 @@ def test_pulsar_pycalc():
     assert peaklag_11 == 0, "frame lag nonzero!"
 
     delays, snrs = extract_subframe_delay(cross[:,0,:,:,:,0])
-    assert np.isclose(delays[0,0],-0.21765625,rtol=1e-04), "delays[0,0] wrong!" #should be good to sub nanosecond
-    assert np.isclose(delays[1,1],-0.21578125,rtol=1e-04), "delays[1,1] wrong!" #should be good to sub nanosecond
+    assert np.isclose(delays[0,0],-0.21765625,rtol=1e-04), f"delays[0,0] wrong! Delays evaluated to be {delays}" #should be good to sub nanosecond
+    assert np.isclose(delays[1,1],-0.21578125,rtol=1e-04), f"delays[1,1] wrong! Delays evaluated to be {delays}" #should be good to sub nanosecond
     assert snrs[0,0]>=39, "fringe signal to noise is below expected value in 0,0 pol"
     assert snrs[1,1]>=30, "fringe signal to noise is below expected value in 0,0 pol"
     print('test_pulsar_pycalc() snr:',snrs)
+
 
 def test_pulsar_pycalc_corrjob():
     """Tests whether cross correlation of a pulsar yields expected results based on real data using pycalc in crosscorr_core. 
     Same as test_pulsar_pycalc() but using pycalc instead of difxcalc-wrapper in CorrJob
     Run this on CANFAR in a container containing pycalc, pyfx, and baseband-analysis.
     """
-    from pyfx import corr_job_pycalc as corr_job
+    telescopes = [chime,kko]
     chime_file='/arc/projects/chime_frb/shiona/public/pyfx_test_files/304050301_target_B0355+54_chime.h5'
     kko_file='/arc/projects/chime_frb/shiona/public/pyfx_test_files/304050301_target_B0355+54_kko.h5'
     chime_bbdata = BBData.from_file(chime_file)
@@ -532,39 +285,41 @@ def test_pulsar_pycalc_corrjob():
     ra=np.atleast_1d(chime_bbdata['tiedbeam_locations']['ra'][0])
     dec=np.atleast_1d(chime_bbdata['tiedbeam_locations']['dec'][0])
     print('ra,dec:',ra,dec)
-    pulsar_job = corr_job.CorrJob([chime_file,kko_file],
+    pulsar_job = corr_job.CorrJob([chime_file,kko_file],telescopes=telescopes,
        ras = ra,
        decs = dec,
+       source_names=np.atleast_1d('B0355+54')
 	   )
-
+    toa=chime_bbdata['time0']['ctime'][0]+25310*2.56e-6
+    print(toa)
     t,w,r = pulsar_job.define_scan_params(ref_station = 'chime',
 			      start_or_toa = 'start',
-			      t0f0 = (1689783027.6518016, 800.0),
+			      t0f0 = (toa, 800.0),#(1689783027.6518016, 800.0),
 			      time_spacing = 'even',
 			      freq_offset_mode = 'bbdata',
 			      Window = np.ones(1024) * 761,
 			      r_ij = np.ones(1024) * 1,
 			      period_frames = 761,
 			      dm = 57.1,
+                  max_lag=100,
 			      num_scans_before = 0,
                               num_scans_after = 2,
 			      )
 
     vlbivis = pulsar_job.run_correlator_job(t[...,0:1],w[0,:,0:1].astype(int),r[...,0:1],dm = 57.1,
 			      out_h5_file = False)
-    cross_pycalc = vlbivis['chime-kko']['vis'][:]
-    #assert np.isclose(cross_pycalc[...,0:10,:], cross_copy[...,0:10,:]).all(), 'not the same'
-    #print('yay')
-    assert cross_pycalc.shape == (1024,1,2,2,41,1)
-    cutoff_00=np.median(np.median(np.abs(cross_pycalc[:,0,0,0,:,0])**2,axis=-1))+1*scipy.stats.median_abs_deviation(np.median(np.abs(cross_pycalc[:,0,0,0,:,0])**2,axis=-1))
-    cutoff_11=np.median(np.median(np.abs(cross_pycalc[:,0,1,1,:,0])**2,axis=-1))+1*scipy.stats.median_abs_deviation(np.median(np.abs(cross_pycalc[:,0,1,1,:,0])**2,axis=-1))
-    for iifreq in range(len(cross_pycalc)):
-        val_00=np.median(np.abs(cross_pycalc[iifreq,0,0,0,:,0])**2,axis=-1)
-        val_11=np.median(np.abs(cross_pycalc[iifreq,0,1,1,:,0])**2,axis=-1)
+    cross = vlbivis['chime-kko']['vis'][:]
+    assert cross.shape == (1024,1,2,2,201,1)
+    cutoff_00=np.median(np.median(np.abs(cross[:,0,0,0,:,0])**2,axis=-1))+1*scipy.stats.median_abs_deviation(np.median(np.abs(cross[:,0,0,0,:,0])**2,axis=-1))
+    cutoff_11=np.median(np.median(np.abs(cross[:,0,1,1,:,0])**2,axis=-1))+1*scipy.stats.median_abs_deviation(np.median(np.abs(cross[:,0,1,1,:,0])**2,axis=-1))
+    for ifreq in range(len(cross)):
+        val_00=np.median(np.abs(cross[ifreq,0,0,0,:,0])**2,axis=-1)
+        val_11=np.median(np.abs(cross[ifreq,0,1,1,:,0])**2,axis=-1)
         if val_00 > cutoff_00:
-            cross_pycalc[iifreq,0,0,0,:,0] *=0
+            cross[ifreq,0,0,0,:,0] *=0
         if val_11 > cutoff_11:
-            cross_pycalc[iifreq,0,1,1,:,0] *=0
+            cross[ifreq,0,1,1,:,0] *=0        
+    cross_pycalc=cross
     peaklags= extract_frame_delay(
             cross_pycalc[:,0,:,:,:,0])
     peaklag_00=peaklags[0]
@@ -579,11 +334,11 @@ def test_pulsar_pycalc_corrjob():
     # note that the S/N are lower and delays are different from test_pulsar_pycalc
     # this is because the RFI mask zaps a slightly different set of channels
     # delay is _still_ good to sub nanosecond
-    assert np.isclose(delays_pycalc[0,0],-0.21765625,atol=1e-03), "delays[0,0] wrong!"
-    assert np.isclose(delays_pycalc[1,1],-0.21578125,atol=1e-03), "delays[1,1] wrong!" 
+    logging.info(snrs_pycalc)
+    logging.info(delays_pycalc)
+    assert np.isclose(delays_pycalc[0,0],-0.21765625,atol=1e-03), f"delays[0,0] wrong! Got {delays_pycalc[0,0]}!"
+    assert np.isclose(delays_pycalc[1,1],-0.21578125,atol=1e-03), f"delays[1,1] wrong! Got {delays_pycalc[1,1]}!"
     
-    assert snrs_pycalc[0,0]>=37, "fringe signal to noise is below expected value in 0,0 pol"
-    assert snrs_pycalc[1,1]>=27, "fringe signal to noise is below expected value in 1,1 pol"
+    assert snrs_pycalc[0,0]>=37, f"fringe signal to noise is below expected value in 0,0 pol, got {snrs_pycalc[0,0]}"
+    assert snrs_pycalc[1,1]>=27, f"fringe signal to noise is below expected value in 1,1 pol, got {snrs_pycalc[1,1]}"
     
-
-
