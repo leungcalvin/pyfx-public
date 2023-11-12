@@ -40,8 +40,10 @@ def get_twr_continuum(telA_bbdata,equal_duration = True, pad = 2000):
     """Return t,w,r by looking at the nan pattern in telA_bbdata, making use of ~all the data we have.
     
     This is an appropriate way to get the t,w,r data for a single phase-center pointing on a continuum source.
+
     To take into account that the different boundaries of the data, we trim the edges of the scan.
     We remove :pad: frames from both the left and right of the integration.t_A & ww.
+
     Inputs
     ------
     telA_bbdata : BBData
@@ -58,10 +60,11 @@ def get_twr_continuum(telA_bbdata,equal_duration = True, pad = 2000):
     window = duration(w,axis = -1)
     if w.shape[-1] // 2 > np.median(window):
         print(f'WARNING: More than half of the channels invalid in data for {telA_bbdata.attrs["event_id"]}')
-    if equal_duration:
-        good_lengths = (window[window > (w.shape[-1] // 2)]) # consider channels in which we have >1/2 the time samples
-        window = np.zeros_like(window,dtype = int) + np.min(good_lengths) # take the minimum of that.
-    assert (np.min(good_lengths) - 2 * pad > 0), "twr params result in negative integration duration when zero-padded. Please optimize manually, e.g. decrease pad value or input twr manually."
+    if equal_duration: # choose the length that maximizes the sensitivity as quantified by num_valid_channels x duration
+        sorted_window_lengths = np.sort(window)
+        sens_metric = sorted_window_lengths * (1024 - np.arange(1024)) # n_time * n_channels with that many valid samples
+        window = sorted_window_lengths[np.argmax(sens_metric)] + np.zeros(1024,dtype=int)
+    assert (np.min(window) - 2 * pad > 0), "twr params result in negative integration duration when zero-padded. Please optimize manually, e.g. decrease pad value or input twr manually."
     tt,ww,rr =tw2twr(t_a + pad, window - 2 * pad)
     ww = np.atleast_2d(ww)
     tt.shape = (1024,1,1)
