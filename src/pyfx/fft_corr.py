@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.fft import fft, ifft, next_fast_len,fftfreq
+from scipy.fft import fft, ifft, next_fast_len,fftfreq,fftshift
 from scipy import signal
 from pyfx import config,pfb
 
@@ -52,7 +52,7 @@ def basic_correlator(w1, w2, channelization = CHANNELIZATION, full_output = Fals
     """
     cross_corr_func = fft_corr(w1, w2)
     if full_output: 
-        frame_lags = np.concatenate((np.arange(cross_corr_func.shape[-1] / 2),np.arange(-cross_corr_func.shape[-1] / 2,0)))
+        frame_lags = fftfreq(cross_corr_func.shape[-1]) * cross_corr_func.shape[-1]
         return cross_corr_func, frame_lags
     return max_lag_slice(cross_corr_func,max_lag = channelization['nlags'],lag_axis = -1)
 
@@ -71,7 +71,7 @@ def inverse_variance_weight_correlator(w1, w2, channelization = CHANNELIZATION,f
     cross_corr_func = fft_corr(w1_ivw, w2)
 
     if full_output: 
-        frame_lags = np.concatenate((np.arange(cross_corr_func.shape[-1] / 2),np.arange(-cross_corr_func.shape[-1] / 2,0)))
+        frame_lags = fftfreq(cross_corr_func.shape[-1]) * cross_corr_func.shape[-1]
         return cross_corr_func, frame_lags
     return max_lag_slice(cross_corr_func,max_lag = channelization['nlags'],lag_axis = -1)
 
@@ -94,7 +94,7 @@ def signal_to_noise_weight_correlator(w1, w2, signal_kernel, channelization = CH
     cross_corr_func = fft_corr(w1_sivw, w2_ivw)
     
     if full_output: 
-        frame_lags = np.concatenate((np.arange(cross_corr_func.shape[-1] / 2),np.arange(-cross_corr_func.shape[-1] / 2,0)))
+        frame_lags = fftfreq(cross_corr_func.shape[-1]) * cross_corr_func.shape[-1]
         return cross_corr_func, frame_lags
     return max_lag_slice(cross_corr_func,max_lag = channelization['nlags'],lag_axis = -1)
 
@@ -110,23 +110,24 @@ def subframe_signal_to_noise_search_correlator(data_bb_1, data_bb_2,
     nsamp_frame = channelization['lblock']
     n_search_lags = len(channelization['search_lags'])
     # Inverse covariance weight the baseband data.
-    inv_noise_covar_kernel, noise_covar_lags = pfb.calculate_inv_noise_covar_kernel(channelization)
     w1_ivw = convolve_bb_time_kernel(data_bb_1, kernel = channelization['IVW_KERNEL'])
     w2_ivw = convolve_bb_time_kernel(data_bb_2, kernel = channelization['IVW_KERNEL'])
     # Loop over trial subframe delays and correlate the data optimized for each.
     
     for ii,subframe_delay in enumerate(channelization['search_lags']):
+        print(f'Searching subframe_delay {ii} of {n_search_lags}')
         # The trial delay and signal template prediction at that delay.
         # Signal weight the data and correlate.
         w1_sivw = convolve_bb_time_kernel(w1_ivw, kernel = channelization['SIG_SEARCH_KERNEL'][ii,:])
         this_cross_corr_func = fft_corr(w1_sivw,w2_ivw)
-        this_frame_lags = subframe_delay / channelization['lblock'] + np.concatenate((np.arange(w1_ivw.shape[-1] / 2),np.arange(-w1_ivw.shape[-1] / 2,0)))
+        this_frame_lags = subframe_delay / channelization['lblock'] + fftfreq(w1_sivw.shape[-1]) * w1_sivw.shape[-1]
 
         # Recenter the frame lags to include the trial delay; perform the
         # corresponding compensation of the correlation function phase.
-        # CL: SKip the recentering and phasing in PyFX!
+        # CL: Skip the recentering and phasing in PyFX? No, we want all quasi-integer lags to correspond to the same sub-frame delay.
         # this_frame_lags = this_frame_lags + ii / subframe_granularity
-        # this_cross_corr_func /= delay_phase_factor(subframe_delay, nchan, np.arange(nchan))[:, None]
+        assert w1_sivw.shape[0] == channelization['nchan'], "Wrong number of channels; search correlator requires 1024 channels at present."
+        this_cross_corr_func /= np.exp(2j * np.pi * channelization['frame_microseconds'] * subframe_delay / channelization['lblock'] * channelization['freq_mhz'])[:, None]
 
         if ii == 0:
             # Initialize global output arrays
@@ -139,11 +140,14 @@ def subframe_signal_to_noise_search_correlator(data_bb_1, data_bb_2,
         frame_lags[ii, :] = this_frame_lags
         cross_corr_func[:, ii, :] = this_cross_corr_func
 
-    frame_lags.shape = (nframe_lags * n_search_lags,)
-    cross_corr_func.shape = (nchan, nframe_lags * n_search_lags)
-    iisort = np.argsort(frame_lags)
-    frame_lags = frame_lags[iisort]
-    cross_corr_func = cross_corr_func[:, iisort]
+    # Now we need to re-order everything to match the original convention.
+    # We fftshift, then transpose to sort everything as a function of increasing quasi-frame delay
+    frame_lags = fftshift(frame_lags,axes = (0,1),).swapaxes(0,1).reshape((nframe_lags * n_search_lags))
+    cross_corr_func = fftshift(cross_corr_func,axes = (1,2)).swapaxes(1,2).reshape((nchan,nframe_lags * n_search_lags)) 
+    
+    # Finally we fftshift again on the flattened array to obey zero lag at index=0 convention.
+    frame_lags = np.roll(fftshift(frame_lags,axes = (-1)), -n_search_lags // 2, axis = -1)
+    cross_corr_func = np.roll(fftshift(cross_corr_func,axes = -1), -n_search_lags // 2, axis = -1)
     if full_output: return cross_corr_func, frame_lags
     return max_lag_slice(cross_corr_func,max_lag = channelization['nlags'],lag_axis = -1)
 

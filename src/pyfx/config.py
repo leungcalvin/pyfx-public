@@ -4,9 +4,8 @@ You might want to configure:
 
 1) The working directory of the delay model,
 2) The channelization of your telescope.
-
-Golden Rule: config cannot import from anything else.
 """
+import numpy as np
 
 CALCFILE_DIR = '/scratch/calvin' # where .calc files are temporarily saved during CorrJobs
 
@@ -15,14 +14,12 @@ CHIME_PFB = {
     'nchan' : 1024, # Number of frequency channels, not including the Nyquist frequency.
     'lblock' : 2048, # Number of samples in a block. Usu. a fast FFT length; for critically-sampled PFB this is 2*nchan.
     'ntap' : 4, # Number of PFB taps
-    'fmax' : 800, # In MHz.
-    'fmin' : 400.390625, # In MHz; Note that we omit the Nyquist frequency.
+    'freq_mhz' : np.linspace(800,400,num = 1024, endpoint = False),
     'frame_microseconds' : 2.56, # In microseconds.
     'chan_bw' : 390.625, # Full-width in kHz
-    'window_type' : 'sinc_hann', # TODO: Implement options besides 'sinc_hann', currently unused.
-    'search_lags' : [   0.        ,  341.33333333,  682.66666667, 1024.        ,
-       1365.33333333, 1706.66666667, 2048.        ], # Sub-integer lags (should be less than lblock) over which to search.
-    'nlags' : 40, # Number of quasi-integer lags to keep. 
+    'window_type' : 'sinc_hann', # TODO: Implement options besides 'sinc_hann', currently this field is unused.
+    'search_lags' : [   0.        ,  341.33333333,  682.66666667, -1024.0 , -682.66666667, -341.33333333], # Sub-integer lags (should be less than lblock) over which to search.
+    'nlags' : 100, # Number of quasi-integer lags to keep. 
 }
 """A note about nlags: 
 For all of the correlators this is the number of integer lags and the maximum delay range. 

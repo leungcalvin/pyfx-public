@@ -88,7 +88,7 @@ def test_corr_job_runs_no_fill():
 
 
 
-    def test_pulsar_core():
+def test_pulsar_core():
     """Tests whether cross correlation of a pulsar yields expected results based on real data using pycalc in crosscorr_core. 
     Run this on CANFAR in a container containing pycalc, pyfx, and baseband-analysis.
     """
