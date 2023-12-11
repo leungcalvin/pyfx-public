@@ -127,7 +127,7 @@ def subframe_signal_to_noise_search_correlator(data_bb_1, data_bb_2,
         # CL: Skip the recentering and phasing in PyFX? No, we want all quasi-integer lags to correspond to the same sub-frame delay.
         # this_frame_lags = this_frame_lags + ii / subframe_granularity
         assert w1_sivw.shape[0] == channelization['nchan'], "Wrong number of channels; search correlator requires 1024 channels at present."
-        this_cross_corr_func /= np.exp(2j * np.pi * channelization['frame_microseconds'] * subframe_delay / channelization['lblock'] * channelization['freq_mhz'])[:, None]
+
 
         if ii == 0:
             # Initialize global output arrays
