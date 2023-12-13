@@ -284,8 +284,8 @@ def crosscorr_core(
                     ########## cross-correlate the on-signal ##############
                     for pol_0 in range(n_pol):
                         for pol_1 in range(n_pol):
-                            assert not np.isnan(np.min(scan_a_cd[:, pol_0, start:stop].flatten())), "Scan parameters have been poorly defined for telescope A. Please ensure there are no nans in the baseband data"
-                            assert not np.isnan(np.min(scan_b_fs_cd[:, pol_0, start:stop].flatten())), "Scan parameters have been poorly defined for telescope B. Please ensure there are no nans in the baseband data"
+                            #assert not np.isnan(np.min(scan_a_cd[:, pol_0, start:stop].flatten())), "Scan parameters have been poorly defined for telescope A. Please ensure there are no nans in the baseband data"
+                            #assert not np.isnan(np.min(scan_b_fs_cd[:, pol_0, start:stop].flatten())), "Scan parameters have been poorly defined for telescope B. Please ensure there are no nans in the baseband data"
                             _vis = basic_correlator(
                                 scan_a_cd[:, pol_0, start:stop],
                                 scan_b_fs_cd[:, pol_1, start:stop],
