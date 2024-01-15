@@ -2,7 +2,7 @@
 import numpy as np
 import os
 from pyfx.core_correlation import crosscorr_core, autocorr_core
-from pyfx.core_correlation_station import cross_correlate_baselines
+from pyfx.core_correlation_station import cross_correlate_baselines,autocorr_core
 from pyfx.core_vis import extract_subframe_delay, extract_frame_delay
 from pyfx import corr_job_station as corr_job_station
 
@@ -54,7 +54,6 @@ class VeryBasicBBData:
                 "ctime_offset": self.ctime_offset
             }
         
-
 
 def test_autocorr_sim():
     """Tests whether output of autocorr makes sense given "simulated" input data.
@@ -130,12 +129,12 @@ def test_continuum_calibrator():
     nscan=1
     npointing=1
     max_lag=100
-    t_a=np.zeros((1024,npointing,nscan),int)+10000
+    t_a=np.zeros((1024,npointing,nscan),int)#+10000
     R=np.ones((1024,npointing,nscan),int)
     window=np.ones((npointing,nscan),int)
 
     ntime=int(len(chime_bbdata["tiedbeam_baseband"][nscan][0]))
-    window *= ntime-10000  # set to 1000 for smaller test, max 43670
+    window *= ntime#-10000  # set to 1000 for smaller test, max 43670
     
     weight=None
 
@@ -148,8 +147,6 @@ def test_continuum_calibrator():
         precision=9,
     )
     start_time=np.min(real_times)
-
-    duration_min = 1
 
     srcs = ac.SkyCoord(
         ra=np.array([ra]),
@@ -165,11 +162,12 @@ def test_continuum_calibrator():
         duration_min=1,
         base_mode='geocenter', 
         dry_atm=False, 
-        wet_atm=False
+        wet_atm=False,
+        d_interval=1,
     )
     ci.run_driver()
     cross=cross_correlate_baselines(bbdata_top=chime_bbdata, bbdatas=[chime_bbdata,out_bbdata], t_a=t_a, window=window, R=R, pycalc_results=ci,DM=0,
-                        station_indices=[0,1],sample_rate=2.56,max_lag=max_lag,n_pol=2,ref_frame=0,#0,#0,
+                       station_indices=[0,1],sample_rate=2.56,max_lag=max_lag,n_pol=2,ref_frame=0,
                         weight=weight,fast=True)[0]
 
     ### rfi flagging
@@ -188,8 +186,8 @@ def test_continuum_calibrator():
     peaklag_00=peaklags[0]
     peaklag_11=peaklags[1]
 
-    #assert peaklag_00 == 0, "frame lag nonzero!"
-    #assert peaklag_11 == 0, "frame lag nonzero!"
+    assert peaklag_00 == 0, "frame lag nonzero!"
+    assert peaklag_11 == 0, "frame lag nonzero!"
 
     delays, snrs = extract_subframe_delay(cross[:,0,:,:,:,0])
     print('test_continuum_calibrator() snr:',snrs)
@@ -197,8 +195,8 @@ def test_continuum_calibrator():
 
     assert np.isclose(delays[0,0],-0.2521875,rtol=1e-05), "delays[0,0] wrong!" #should be good to sub nanosecond
     assert np.isclose(delays[1,1],-0.25078125,rtol=1e-05), "delays[1,1] wrong!" #should be good to sub nanosecond
-    assert snrs[0,0]>=70, f"fringe signal to noise is below expected value in 0,0 pol, expected (70,54), got {snrs}"
-    assert snrs[1,1]>=54, f"fringe signal to noise is below expected value in 1,1 pol,expected (70,54), got {snrs}"
+    assert snrs[0,0]>=70, f"fringe signal to noise is below expected value in 0,0 pol, expected (70,54), got ({snrs[0,0]},{snrs[1,1]})"
+    assert snrs[1,1]>=54, f"fringe signal to noise is below expected value in 1,1 pol,expected (70,54), got ({snrs[0,0]},{snrs[1,1]})"
 
 
 
@@ -246,7 +244,6 @@ def test_pulsar_core():
     )
     start_time=np.min(real_times)
 
-    duration_min = 1
     srcs = ac.SkyCoord(
         ra=np.array([ra]),
         dec=np.array([dec]),
@@ -261,11 +258,12 @@ def test_pulsar_core():
         duration_min=1,
         base_mode='geocenter', 
         dry_atm=False, 
-        wet_atm=False
+        wet_atm=False,
+        d_interval=1,
     )
     ci.run_driver()
     cross=crosscorr_core(bbdata_a=chime_bbdata, bbdata_b=out_bbdata, t_a=t_a, window=window, R=R, pycalc_results=ci,DM=57.1,
-                        index_A=0, index_B=1,sample_rate=2.56,max_lag=max_lag,n_pol=2,ref_frame=0,#ref_frame=0,
+                        index_A=0, index_B=1,sample_rate=2.56,max_lag=max_lag,n_pol=2,#ref_frame=0,#ref_frame=0,
                         weight=weight)
     cross_copy = cross.copy()
     ### rfi flagging
@@ -314,20 +312,23 @@ def test_pulsar_pycalc_corrjob():
        decs = dec,
        source_names=np.atleast_1d('B0355+54')
 	   )
-    toa=chime_bbdata['time0']['ctime'][0]+25310*2.56e-6
-    t,w,r = pulsar_job.define_scan_params(ref_station = 'chime',
+    toa = Time(
+        out_bbdata["time0"]["ctime"][0],
+        val2=out_bbdata["time0"]["ctime_offset"][0],
+        format="unix",
+        precision=9,
+    ) +25310*2.56e-6*un.s
+
+    t,w,r = pulsar_job.define_scan_params(
 			      start_or_toa = 'start',
 			      t0f0 = (toa, 800.0),#(1689783027.6518016, 800.0),
 			      freq_offset_mode = 'dm',
 			      Window = np.ones(1024) * 761,
 			      r_ij = np.ones(1024) * 1,
-			      period_frames = 761,
 			      dm = 57.1,
                   max_lag=100,
-			      num_scans_before = 0,
-                              num_scans_after = 2,
 			      )
-
+    logging.info(t)
     vlbivis = pulsar_job.run_correlator_job(t[...,0:1],w[0,:,0:1].astype(int),r[...,0:1],dm = 57.1,
 			      out_h5_file = False)
     cross = vlbivis['chime-kko']['vis'][:]

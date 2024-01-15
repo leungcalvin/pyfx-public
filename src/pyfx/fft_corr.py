@@ -47,17 +47,19 @@ def fft_corr(
     #out[1:n//2] contains positive lags, out[n//2+1] contains negative lags"
     return ifft(fft(w1, axis=axis) * fft(w2, axis=axis).conj(), axis=axis)
 
-def basic_correlator(w1, w2, channelization = CHANNELIZATION, full_output = False):
+def basic_correlator(w1, w2, max_lag=None,channelization = CHANNELIZATION, full_output = False):
     """Basic correlator.
     """
+    if max_lag is None:
+        max_lag=channelization['nlags']
     cross_corr_func = fft_corr(w1, w2)
     if full_output: 
         frame_lags = fftfreq(cross_corr_func.shape[-1]) * cross_corr_func.shape[-1]
         return cross_corr_func, frame_lags
-    return max_lag_slice(cross_corr_func,max_lag = channelization['nlags'],lag_axis = -1)
+    return max_lag_slice(cross_corr_func,max_lag = max_lag,lag_axis = -1)
 
 
-def inverse_variance_weight_correlator(w1, w2, channelization = CHANNELIZATION,full_output = False):
+def inverse_variance_weight_correlator(w1, w2, max_lag=None,channelization = CHANNELIZATION,full_output = False):
     """Inverse noise weighting correlator.
 
     This which accounts for the sample-to-sample correlations *within* a
@@ -67,15 +69,17 @@ def inverse_variance_weight_correlator(w1, w2, channelization = CHANNELIZATION,f
 
     """
     # Noise weight the data by convolving with the inverse covariance kernel.
+    if max_lag is None:
+        max_lag=channelization['nlags']
     w1_ivw = convolve_bb_time_kernel(w1, kernel = channelization['IVW_KERNEL'])
     cross_corr_func = fft_corr(w1_ivw, w2)
 
     if full_output: 
         frame_lags = fftfreq(cross_corr_func.shape[-1]) * cross_corr_func.shape[-1]
         return cross_corr_func, frame_lags
-    return max_lag_slice(cross_corr_func,max_lag = channelization['nlags'],lag_axis = -1)
+    return max_lag_slice(cross_corr_func,max_lag = max_lag,lag_axis = -1)
 
-def signal_to_noise_weight_correlator(w1, w2, signal_kernel, channelization = CHANNELIZATION, full_output = False):
+def signal_to_noise_weight_correlator(w1, w2, signal_kernel, max_lag=None,channelization = CHANNELIZATION, full_output = False):
     """The optimal delay estimator for a known delay.
 
     Not practical in the real world, since it requires knowledge of the delay
@@ -86,7 +90,8 @@ def signal_to_noise_weight_correlator(w1, w2, signal_kernel, channelization = CH
     signal_kernel : array of length (ntap * 2 + 1,)
         Must provide signal_kernel coefficients along with data arrays.
     """
-
+    if max_lag is None:
+        max_lag=channelization['nlags']
     nsamp_frame = channelization['lblock']
     w1_ivw = convolve_bb_time_kernel(w1, kernel = channelization['IVW_KERNEL'])
     w2_ivw = convolve_bb_time_kernel(w2, kernel = channelization['IVW_KERNEL'])
@@ -96,7 +101,7 @@ def signal_to_noise_weight_correlator(w1, w2, signal_kernel, channelization = CH
     if full_output: 
         frame_lags = fftfreq(cross_corr_func.shape[-1]) * cross_corr_func.shape[-1]
         return cross_corr_func, frame_lags
-    return max_lag_slice(cross_corr_func,max_lag = channelization['nlags'],lag_axis = -1)
+    return max_lag_slice(cross_corr_func,max_lag = max_lag,lag_axis = -1)
 
 def subframe_signal_to_noise_search_correlator(data_bb_1, data_bb_2,
         channelization = CHANNELIZATION,full_output = False):
