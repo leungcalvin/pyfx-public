@@ -129,8 +129,6 @@ class CorrJob:
                 fill_waterfall(this_bbdata, write=True)
                 self.ref_ctimes=this_bbdata['time0']['ctime']
                 self.ref_ctime_offsets=this_bbdata['time0']['ctime_offset']
-        logging.info(f"earliest_start_unix:{earliest_start_unix}")
-        logging.info(f"station_names:{[tel.info.name for tel in self.telescopes]}")
         earliest_start_unix = int(earliest_start_unix - 1) # buffer
         duration_min = 3 #max(int(np.ceil(int(latest_end_unix - earliest_start_unix + 1.0 )/60)),1)
         ci = Calc(
@@ -382,7 +380,6 @@ class CorrJob:
         """
 
         ref_index=self.tel_names.index(self.ref_station)
-        logging.info(f"ref_index:{ref_index}")
         output = VLBIVis()
         pointing_centers = np.zeros((len(self.pointings),),dtype = output._dataset_dtypes['pointing'])
         pointing_centers['corr_ra'] = self.ras
@@ -433,8 +430,6 @@ class CorrJob:
                 )
             logging.info(f'Wrote autos for station {iia}')
 
-        logging.info(t_a_indices)
-        logging.info(w_ij)
         cross = cross_correlate_baselines(
                 bbdatas=tel_bbdatas,
                 bbdata_top=bbdata_top,
