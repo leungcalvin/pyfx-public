@@ -9,13 +9,13 @@ from astropy.time import Time, TimeDelta
 from decimal import Decimal
 import astropy.units as un
 import time
-from pyfx.core_math import fft_corr
-from pyfx.core_math import max_lag_slice
+from pyfx.fft_corr import basic_correlator, max_lag_slice
 import collections
 from pycalc11 import Calc
 from baseband_analysis.core.bbdata import BBData
 from typing import Optional, Tuple, Union, List
 import logging
+from pyfx import config
 
 K_DM = 1 / 2.41e-4  # in s MHz^2 / (pc cm^-3)
 MAX_FRAC_SAMP_LENGTH=32187 #maximum FFT length, chosen to keep delay rate drift (on Earth) within 1/10th of a frame 
@@ -27,7 +27,7 @@ def autocorr_core(
     t_a: np.ndarray,
     window: np.ndarray,
     R: np.ndarray,
-    max_lag: int,
+    max_lag: Optional[int]=None,
     n_pol: int=2,
     zp: bool=True
     ) -> np.ndarray:
@@ -62,6 +62,8 @@ def autocorr_core(
     auto_vis - array of autocorrelations with shape (nfreq, npointing, npol, npol, 2 * nlag + 1, nscan)
 
     """
+    if max_lag is None: #set to default
+        max_lag = config.CHANNELIZATION['nlags']
     n_freq = bbdata_a.nfreq
     n_scan = np.size(t_a, axis=-1)
     n_pointings = bbdata_a["tiedbeam_baseband"].shape[1] // n_pol
@@ -105,7 +107,7 @@ def autocorr_core(
                 ########## auto-correlate the on-signal ##############
                 for pol_0 in range(n_pol):
                     for pol_1 in range(n_pol):
-                        _vis = fft_corr(
+                        _vis = basic_correlator(
                             scan_a_fs_cd[:, pol_0, start:stop],
                             scan_a_fs_cd[:, pol_1, start:stop])
                         auto_vis[:, kkpointing, pol_0, pol_1,:,jjscan] = np.concatenate(
@@ -119,7 +121,7 @@ def autocorr_core(
                     for pol_0 in range(n_pol):
                         for pol_1 in range(n_pol):
                             if pol_0 == pol_1:
-                                _vis = fft_corr(
+                                _vis = basic_correlator(
                                     scan_a_fs_cd[:, pol_0, start:stop],
                                     scan_a_fs_cd[:, pol_1, start:stop])
                                 auto_vis[:, kkpointing, pol_0, pol_1,:,jjscan] = np.concatenate(
@@ -250,8 +252,8 @@ def cross_correlate_baselines(
     pycalc_results: Calc,
     DM: float,
     station_indices: List[int],
-    max_lag: int,
     ref_frame:int,
+    max_lag: Optional[int]=None,
     sample_rate: float=2.56,
     n_pol: int=2,
     complex_conjugate_convention: int=-1,
@@ -262,7 +264,10 @@ def cross_correlate_baselines(
     zp: bool=True,
     max_frames: int=MAX_FRAC_SAMP_LENGTH, 
     ) -> np.ndarray:
-    
+
+    if max_lag is None:
+        max_lag = config.CHANNELIZATION['nlags']
+        
     n_freqs = np.array([len(bbdata.freq) for bbdata in bbdatas])
     assert len(np.unique(n_freqs))==1,f"There appear to be {n_freqs} frequency channels in each telescope. Please pass in these bbdata objects with frequency channels aligned (i.e. nth index along the frequency axis should correspond to the *same* channel in telescope A and B)"
     n_scan = np.size(t_a, axis=-1)
@@ -433,7 +438,7 @@ def crosscorr_core(
                         for pol_1 in range(n_pol):
                             assert not np.isnan(np.min(scan_a_fs_cd[:, pol_0, start:stop].flatten())), "Scan parameters have been poorly defined for telescope A. Please ensure there are no nans in the baseband data"
                             assert not np.isnan(np.min(scan_b_fs_cd[:, pol_0, start:stop].flatten())), "Scan parameters have been poorly defined for telescope B. Please ensure there are no nans in the baseband data"
-                            _vis = fft_corr(
+                            _vis = basic_correlator(
                                 scan_a_fs_cd[:, pol_0, start:stop],
                                 scan_b_fs_cd[:, pol_1, start:stop])
                             cross_vis[:, kkpointing, pol_0, pol_1,:,jjscan] = np.concatenate(
@@ -453,7 +458,7 @@ def crosscorr_core(
                             for pol_1 in range(n_pol):
                                 assert not np.isnan(np.min(scan_a_fs_cd[freq, pol_0, start:stop].flatten())), "Scan parameters have been poorly defined for telescope A. Please ensure there are no nans in the baseband data"
                                 assert not np.isnan(np.min(scan_b_fs_cd[freq, pol_0, start:stop].flatten())), "Scan parameters have been poorly defined for telescope B. Please ensure there are no nans in the baseband data"
-                                _vis = fft_corr(
+                                _vis = basic_correlator(
                                     scan_a_fs_cd[freq, pol_0, start:stop],
                                     scan_b_fs_cd[freq, pol_1, start:stop])
                                 cross_vis[freq, kkpointing, pol_0, pol_1, :,jjscan] = np.concatenate(
