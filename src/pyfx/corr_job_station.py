@@ -2,6 +2,7 @@ import os,datetime
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
+import astropy
 import astropy.coordinates as ac
 import astropy.units as un
 from baseband_analysis.core import BBData
@@ -213,6 +214,7 @@ class CorrJob:
         if freq_offset_mode == "dm":
             assert t0f0 is not None, "t0f0 (unix toa [s], ref freq[Mhz]) must be passed in if freq_offset_mode is dm"
             (t00, f0) = t0f0 #only support ac time and floats for now
+            assert isinstance(t00,astropy.time.core.Time), "t00 must be an astropy time"
             t_ij = self._ti0_from_t00_dm(t00, f0, dm = dm, fi = FREQ)
             t_ij=t_ij.reshape(t_ij.shape[0],1,1) #only supports single pointing single scan in this mode right now
         else:
@@ -408,7 +410,7 @@ class CorrJob:
             indices[mask_a] = int(bbdata_a.ntime // 2)
             # ...but we just let the correlator correlate
             logging.info(f'Calculating autos for station {iia}')
-            auto_vis = autocorr_core(dm, bbdata_a, 
+            auto_vis = autocorr_core(DM=dm, bbdata_a=bbdata_a, 
                                     t_a = indices,
                                     window = w_ij,
                                     R = r_ij,
