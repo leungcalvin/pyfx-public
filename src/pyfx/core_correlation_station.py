@@ -278,6 +278,7 @@ def cross_correlate_baselines(
 
     fringestopped_stations=[]
     for i in range(len(bbdatas)):
+        bbdatas[i]['tiedbeam_baseband'][:]=np.nan_to_num(bbdatas[i]['tiedbeam_baseband'][:], nan=0, posinf=0, neginf=0)
         bbdata_fs=fringestop_station(
             bbdata=bbdatas[i],bbdata_top=bbdata_top,t_a=t_a,window=window,R=R,pycalc_results=pycalc_results,
             station_index=station_indices[i],ref_frame=ref_frame,sample_rate=sample_rate,n_pol=n_pol,complex_conjugate_convention=complex_conjugate_convention,

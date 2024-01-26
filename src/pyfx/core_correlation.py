@@ -66,6 +66,9 @@ def autocorr_core(
     n_freq = bbdata_a.nfreq
     n_scan = np.size(t_a, axis=-1)
     n_pointings = bbdata_a["tiedbeam_baseband"].shape[1] // n_pol
+    
+    # convert all nans to 0s
+    bbdata_a['tiedbeam_baseband'][:]=np.nan_to_num(bbdata_a['tiedbeam_baseband'][:], nan=0, posinf=0, neginf=0)
 
     vis_shape = (n_freq, n_pointings, n_pol, n_pol, 2 * max_lag + 1,n_scan)
     auto_vis = np.zeros(vis_shape, dtype=bbdata_a['tiedbeam_baseband'].dtype)
@@ -220,6 +223,11 @@ def crosscorr_core(
     f0 = bbdata_a.index_map["freq"]["centre"] #shape is (nfreq)
     f0_b = bbdata_b.index_map["freq"]["centre"] #shape is (nfreq)
 
+    # convert all nans to 0s
+    bbdata_a['tiedbeam_baseband'][:]=np.nan_to_num(bbdata_a['tiedbeam_baseband'][:], nan=0, posinf=0, neginf=0)
+    bbdata_b['tiedbeam_baseband'][:]=np.nan_to_num(bbdata_b['tiedbeam_baseband'][:], nan=0, posinf=0, neginf=0)
+
+    
     for kkpointing in range(n_pointings):
         for jjscan in range(n_scan):
             wij=window[kkpointing,jjscan]
