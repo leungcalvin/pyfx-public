@@ -10,7 +10,7 @@ import numpy as np
 CALCFILE_DIR = '/scratch/calvin' # where .calc files are temporarily saved during CorrJobs
 
 """Different channelization parameters supported in PyFX. Add yours here!"""
-CHIME_PFB = {
+CHIME_PFB = { # for use with CHIME Outriggers
     'nchan' : 1024, # Number of frequency channels, not including the Nyquist frequency.
     'lblock' : 2048, # Number of samples in a block. Usu. a fast FFT length; for critically-sampled PFB this is 2*nchan.
     'ntap' : 4, # Number of PFB taps
@@ -26,7 +26,7 @@ For all of the correlators this is the number of integer lags and the maximum de
 For the search correlator we oversample in lag space by a factor of n_search_lags...
 ...we keep this many points corresponding to a delay range of `nlags / n_search_lags`."""
 
-CHIME_FFT = {
+CHIME_FFT = { # for testing
     'nchan' : 1024,
     'lblock' : 2048,
     'ntap' : 1,
@@ -38,7 +38,7 @@ CHIME_FFT = {
     'nlags' : 40
 }
 
-LITTLE_CRITICAL_PFB = {
+LITTLE_CRITICAL_PFB = { # for testing
     'nchan' : 64,
     'lblock' : 128,
     'ntap' : 4,
