@@ -118,6 +118,7 @@ def _ti0_from_t00_bbdata(bbdata_filename, t_00,f0):
 
 def _ti0_from_t00_dm(bbdata_filename, t00, f0, dm, fi):
     ti0 = t00 + K_DM * dm * (fi**-2 - f0**-2)  # for fi = infinity, ti0 < t00.
+    print('_ti0_from_t00_dm 0:',ti0[0])
     return round_to_integer_frame(ti0, bbdata_filename)
 
 def validate_wij(w_ij, t_ij, r_ij, dm=None):
@@ -180,9 +181,13 @@ def round_to_integer_frame(timestamps: np.ndarray, bbdata_filename):
         timestamps.shape = (1024,1)
     freq_id_present = get_all_im_freq(bbdata_filename)['id']
     time0_present = get_all_time0(bbdata_filename)
+    print(time0_present[0:10])
     time0_ctime_full = extrapolate_to_full_band(time0_present, freq_id_present)['ctime'][:]
+    print(timestamps[0:10])
+    print(time0_ctime_full[0:10])
     time0_ctime_full.shape = (1024,1)
     int_offset_full = np.rint((timestamps - time0_ctime_full) / 2.56e-6)
+    print('int offset',int_offset_full[0])
     """This gives absolute timestamps good to ~40 nanoseconds, limited by float64."""
     timestamps_rounded = time0_ctime_full + int_offset_full * 2.56e-6
     return timestamps_rounded.squeeze()
@@ -296,6 +301,9 @@ class CorrJob:
         self.tel_names = sorted(self.tel_names) # sort tel_names alphabetically; this becomes the difxcalc antenna index mapping
         self.telescopes = telescopes #[telescopes.tel_from_name(n) for n in self.tel_names]
         assert len(self.telescopes)==len(telescopes), "each index of telescopes must map one-to-one to bbdata_filepaths"
+        for fn,tel_name in zip(bbdata_filepaths,self.tel_names):
+            assert tel_name in fn, f"Expected {fn} to correspond to telescope {tel_name}. Reorder your input filepaths such that telescopes are alphabetical."
+
         self.bbdata_filepaths = [bbdata_filepaths[ii] for ii in np.argsort(self.tel_names)] 
         bbdata_0 = BBData.from_file(bbdata_filepaths[0],freq_sel=[0,-1])
         # Get pointing centers from reference station, if needed.
@@ -409,7 +417,7 @@ class CorrJob:
         """
         bbdata_ref_filename = self.bbdata_filepaths[self.tel_names.index(ref_station)]
         # First: if t0f0 is a bunch of strings, then get t0 & f0 from the BBData. 
-        if type(t0f0[0]) is not float and type(t0f0[1]) is not float:
+        if type(t0f0[0]) is str or type(t0f0[1]) is str:
             t00, f0 = self.t0_f0_from_bbdata_filename(t0f0, bbdata_ref_filename)
         else: # OK, I guess we were given t00 and f0
             (t00, f0) = t0f0
@@ -476,27 +484,34 @@ class CorrJob:
                 tij_sp[iitel,:,jjpointing,:] = tij + tau_ij
         return tij_sp
 
-    def visualize_twr(self,bbdata_ref_filename,t,w,r,pointing = 0,dm = None,fscrunch = 4, tscrunch = None):
+    def visualize_twr(self,bbdata_ref_filename,t,w,r,pointing = 0,dm_desmear = None,fscrunch = 4, tscrunch = None,**imshow_kwargs):
+        """Visualize a particular t,w,r before committing to it."""
+
         bbdata_A = BBData.from_file(bbdata_ref_filename)
         iiref = self.tel_names.index(station_from_bbdata(bbdata_A))
-        fill_waterfall(bbdata_A,write = True)
-        if dm is not None:
-            from baseband_analysis.core.dedispersion import coherent_dedisp
-            # TODO: CL: need to replace with pyfx.core_correlation.intrachannel_dedisp
-            wfall = coherent_dedisp(data = bbdata_A,DM = dm,time_shift=False)
-        else:
-            wfall = bbdata_A['tiedbeam_baseband'][:]
-        wwfall = np.abs(wfall)**2
-        wwfall -= np.nanmedian(wwfall,axis = -1)[:,:,None]
-        wwfall /= median_abs_deviation(wwfall,axis = -1,nan_policy='omit')[:,:,None]
+        if not hasattr(self,'ref_wwfall'):
+            print(f'Processing waterfall from {bbdata_ref_filename}...')
+            fill_waterfall(bbdata_A,write = True)
+            print(f'Infilling missing frequency channels....')
+            if dm_desmear is not None:
+                from baseband_analysis.core.dedispersion import coherent_dedisp
+                # TODO: CL: need to replace with pyfx.core_correlation.intrachannel_dedisp
+                wfall = coherent_dedisp(data = bbdata_A,DM = dm_desmear,time_shift=False)
+                print(f'DM provided; applying coherent dedispersion to DM = {dm_desmear}.')
+            else:
+                wfall = bbdata_A['tiedbeam_baseband'][:]
+                print(f'No DM provided.')
+            wwfall = np.abs(wfall)**2
+            wwfall -= np.nanmedian(wwfall,axis = -1)[:,:,None]
+            wwfall /= median_abs_deviation(wwfall,axis = -1,nan_policy='omit')[:,:,None]
+            self.ref_wwfall = wwfall
         if tscrunch is None:
             tscrunch = int((np.median(w) // 10 ))
-        sww = _scrunch(wwfall,fscrunch = fscrunch, tscrunch = tscrunch)
-        del wwfall
+        sww = _scrunch(self.ref_wwfall,fscrunch = fscrunch, tscrunch = tscrunch)
         y = np.arange(1024)
+        f = plt.figure()
+        plt.imshow(sww[:,pointing] + sww[:,pointing+1],**imshow_kwargs)
         for iiscan in range(t.shape[-1]):
-            f = plt.figure()
-            plt.imshow(sww[:,pointing] + sww[:,pointing+1],aspect = 'auto',vmin = -1,vmax = 3,interpolation = 'none')
 
             x_start = (t[iiref,:,pointing,iiscan] - bbdata_A['time0']['ctime'][:]- bbdata_A['time0']['ctime_offset'][:]) / (2.56e-6 * tscrunch)
             x_end = x_start + w[:,pointing,iiscan] / tscrunch

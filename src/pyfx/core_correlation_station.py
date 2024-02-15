@@ -9,7 +9,8 @@ from astropy.time import Time, TimeDelta
 from decimal import Decimal
 import astropy.units as un
 import time
-from pyfx.fft_corr import basic_correlator, max_lag_slice
+from pyfx.fft_corr import basic_correlator #subframe_signal_to_noise_search_correlator as basic_correlator
+from pyfx.fft_corr import max_lag_slice
 import pyfx.config as config
 import collections
 from pycalc11 import Calc
