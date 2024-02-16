@@ -487,7 +487,7 @@ def getitem_zp1d(arr,start_want,stop_want):
     
     TODO: make this work over a given axis of an arbitrary np.ndarray
     """
-    width = stop_want - start_want
+    width = int(stop_want - start_want)
     assert width >= 0, "Negative scan length not allowed; check your w_ij"
     out = np.zeros(dtype = arr.dtype,shape = (width,))
     start_have = 0

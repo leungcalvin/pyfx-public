@@ -224,7 +224,7 @@ class CorrJob:
 
         # If _ti0 is a TOA, need to shift _ti0 back by half a scan length 
         if start_or_toa == 'toa':
-            t_ij -= Window/2  # Scan duration given by :Window:, not :period_frames:!
+            t_ij -= (Window//2).astype(int)  # Scan duration given by :Window:, not :period_frames:!
             logging.info('INFO: Using TOA mode: shifting all scans to be centered on t_ij')
 
         ctime = Time(
