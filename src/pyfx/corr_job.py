@@ -476,27 +476,33 @@ class CorrJob:
                 tij_sp[iitel,:,jjpointing,:] = tij + tau_ij
         return tij_sp
 
-    def visualize_twr(self,bbdata_ref_filename,t,w,r,pointing = 0,dm = None,fscrunch = 4, tscrunch = None):
+    def visualize_twr(self,bbdata_ref_filename,t,w,r,pointing = 0,dm = None,include_pols = [0,1],fscrunch = 4, tscrunch = None,**imshow_kwargs):
         bbdata_A = BBData.from_file(bbdata_ref_filename)
         iiref = self.tel_names.index(station_from_bbdata(bbdata_A))
         fill_waterfall(bbdata_A,write = True)
-        if dm is not None:
-            from baseband_analysis.core.dedispersion import coherent_dedisp
-            # TODO: CL: need to replace with pyfx.core_correlation.intrachannel_dedisp
-            wfall = coherent_dedisp(data = bbdata_A,DM = dm,time_shift=False)
+        if hasattr(self,"ref_wfall") and dm == self.ref_wfall_dm:
+            wwfall = self.ref_wfall
         else:
-            wfall = bbdata_A['tiedbeam_baseband'][:]
-        wwfall = np.abs(wfall)**2
-        wwfall -= np.nanmedian(wwfall,axis = -1)[:,:,None]
-        wwfall /= median_abs_deviation(wwfall,axis = -1,nan_policy='omit')[:,:,None]
+            if dm is not None:
+                from baseband_analysis.core.dedispersion import coherent_dedisp
+                # TODO: CL: need to replace with pyfx.core_correlation.intrachannel_dedisp
+                wfall = coherent_dedisp(data = bbdata_A,DM = dm,time_shift=False)
+            else:
+                wfall = bbdata_A['tiedbeam_baseband'][:]
+            wwfall = np.abs(wfall)**2
+            wwfall -= np.nanmedian(wwfall,axis = -1)[:,:,None]
+            wwfall /= median_abs_deviation(wwfall,axis = -1,nan_policy='omit')[:,:,None]
+            self.ref_wfall = wwfall
+            self.ref_wfall_dm = dm # save this so we desmear once.
+        
         if tscrunch is None:
             tscrunch = int((np.median(w) // 10 ))
         sww = _scrunch(wwfall,fscrunch = fscrunch, tscrunch = tscrunch)
         del wwfall
         y = np.arange(1024)
+        f = plt.figure()
+        plt.imshow(sww[:,pointing] + sww[:,pointing+1],**imshow_kwargs)
         for iiscan in range(t.shape[-1]):
-            f = plt.figure()
-            plt.imshow(sww[:,pointing] + sww[:,pointing+1],aspect = 'auto',vmin = -1,vmax = 3,interpolation = 'none')
 
             x_start = (t[iiref,:,pointing,iiscan] - bbdata_A['time0']['ctime'][:]- bbdata_A['time0']['ctime_offset'][:]) / (2.56e-6 * tscrunch)
             x_end = x_start + w[:,pointing,iiscan] / tscrunch
@@ -505,13 +511,15 @@ class CorrJob:
             x_rplus = x_mid + (x_end - x_start) * 0.5 * r[:,pointing,iiscan]
             plt.fill_betweenx(x1 = x_start, x2 = x_end,y = y/fscrunch,alpha = 0.15)
             if iiscan == 0:
-                linestyle = '-'
+                plt.plot(x_start, y/fscrunch,linestyle = '-',color = 'black',label='window') # shade t
+                plt.plot(x_end, y/fscrunch,linestyle = '-',color = 'black') # shade t + w
+                plt.plot(x_rminus, y/fscrunch,linestyle = '-.',color = 'red',label='integration') # shade t + w/2 - r/2
+                plt.plot(x_rplus, y/fscrunch,linestyle = '-.',color = 'red') # shade t + w/2 + r/2
             else:
-                linestyle = '--'
-            plt.plot(x_start, y/fscrunch,linestyle = linestyle,color = 'black',label='window') # shade t
-            plt.plot(x_end, y/fscrunch,linestyle = linestyle,color = 'black') # shade t + w
-            plt.plot(x_rminus, y/fscrunch,linestyle = '-.',color = 'black',label='integration') # shade t + w/2 - r/2
-            plt.plot(x_rplus, y/fscrunch,linestyle = '-.',color = 'black') # shade t + w/2 + r/2
+                plt.plot(x_start, y/fscrunch,linestyle = '--',color = 'black',) # shade t
+                plt.plot(x_end, y/fscrunch,linestyle = '--',color = 'black') # shade t + w
+                plt.plot(x_rminus, y/fscrunch,linestyle = '-.',color = 'red',) # shade t + w/2 - r/2
+                plt.plot(x_rplus, y/fscrunch,linestyle = '-.',color = 'red') # shade t + w/2 + r/2
             plt.legend(loc='lower left')
             xmin = np.min(t[iiref,:,pointing,:] - bbdata_A['time0']['ctime'][:,None],axis = -1) / (2.56e-6 * tscrunch)
             xmax = np.max(t[iiref,:,pointing,:] - bbdata_A['time0']['ctime'][:,None],axis = -1) / (2.56e-6 * tscrunch)
