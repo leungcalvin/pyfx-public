@@ -10,8 +10,8 @@ from pyfx import corr_job_station
 from pycalc11 import Calc
 from pyfx.core_vis import extract_subframe_delay, extract_frame_delay
 import logging
-chime_file='/arc/projects/chime_frb/shiona/public/pyfx_test_files/astro_256150292_multibeam_LOFAR_L725386_24.2440833_47.8580556_chime.h5'
-kko_file='/arc/projects/chime_frb/shiona/public/pyfx_test_files/astro_256150292_multibeam_LOFAR_L725386_24.2440833_47.8580556_kko.h5'
+chime_file='/arc/projects/chime_frb/pyfx_test_files/astro_256150292_multibeam_LOFAR_L725386_24.2440833_47.8580556_chime.h5'
+kko_file='/arc/projects/chime_frb/pyfx_test_files/astro_256150292_multibeam_LOFAR_L725386_24.2440833_47.8580556_kko.h5'
 FLOAT64_PRECISION = 2 * 2**-22 #our times should be this good: https://www.leebutterman.com/2021/02/01/store-your-unix-epoch-times-as-float64.html
 
 chime = ac.EarthLocation.from_geocentric(
@@ -97,8 +97,8 @@ def test_pulsar_pycalc_corrjob():
     Run this on CANFAR in a container containing pycalc, pyfx, and baseband-analysis.
     """
     telescopes = [chime,kko]
-    chime_file='/arc/projects/chime_frb/shiona/public/pyfx_test_files/304050301_target_B0355+54_chime.h5'
-    kko_file='/arc/projects/chime_frb/shiona/public/pyfx_test_files/304050301_target_B0355+54_kko.h5'
+    chime_file='/arc/projects/chime_frb/pyfx_test_files/304050301_target_B0355+54_chime.h5'
+    kko_file='/arc/projects/chime_frb/pyfx_test_files/304050301_target_B0355+54_kko.h5'
     chime_bbdata = BBData.from_file(chime_file)
     out_bbdata = BBData.from_file(kko_file)
     fill_waterfall(chime_bbdata, write=True)

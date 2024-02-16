@@ -92,8 +92,8 @@ def test_continuum_calibrator():
     from outriggers_vlbi_pipeline.vlbi_pipeline_config import gbo
     telescopes = [chime,kko,gbo]
     telescope_names=['chime','kko']
-    chime_file='/arc/projects/chime_frb/shiona/public/pyfx_test_files/J0117+8928_chime.h5' 
-    kko_file='/arc/projects/chime_frb/shiona/public/pyfx_test_files/J0117+8928_kko.h5'
+    chime_file='/arc/projects/chime_frb/pyfx_test_files/J0117+8928_chime.h5' 
+    kko_file='/arc/projects/chime_frb/pyfx_test_files/J0117+8928_kko.h5'
     chime_bbdata = BBData.from_file(chime_file)
     out_bbdata = BBData.from_file(kko_file)
     
@@ -206,8 +206,8 @@ def test_pulsar_core():
     """
     telescopes = [chime,kko]
     telescope_names=['chime','kko']
-    chime_file='/arc/projects/chime_frb/shiona/public/pyfx_test_files/304050301_target_B0355+54_chime.h5'
-    kko_file='/arc/projects/chime_frb/shiona/public/pyfx_test_files/304050301_target_B0355+54_kko.h5'
+    chime_file='/arc/projects/chime_frb/pyfx_test_files/304050301_target_B0355+54_chime.h5'
+    kko_file='/arc/projects/chime_frb/pyfx_test_files/304050301_target_B0355+54_kko.h5'
     chime_bbdata = BBData.from_file(chime_file)
     out_bbdata = BBData.from_file(kko_file)
     fill_waterfall(chime_bbdata, write=True)
@@ -298,8 +298,8 @@ def test_pulsar_pycalc_corrjob():
     Run this on CANFAR in a container containing pycalc, pyfx, and baseband-analysis.
     """
     telescopes = [chime,kko]
-    chime_file='/arc/projects/chime_frb/shiona/public/pyfx_test_files/304050301_target_B0355+54_chime.h5'
-    kko_file='/arc/projects/chime_frb/shiona/public/pyfx_test_files/304050301_target_B0355+54_kko.h5'
+    chime_file='/arc/projects/chime_frb/pyfx_test_files/304050301_target_B0355+54_chime.h5'
+    kko_file='/arc/projects/chime_frb/pyfx_test_files/304050301_target_B0355+54_kko.h5'
     chime_bbdata = BBData.from_file(chime_file)
     out_bbdata = BBData.from_file(kko_file)
     fill_waterfall(chime_bbdata, write=True)
