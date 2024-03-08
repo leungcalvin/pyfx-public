@@ -15,9 +15,9 @@ Natively supports frequency-dependent pulsar gates, and coherent dedispersion.
 You will also need `pycalc` and you probably will need `coda`. Use `main` branch for both.
 
 ## Usage
-You will want to set up a `CorrJob` to handle the correlation over all possible baselines. The `CorrJob` will specify the correlation start and stop times as a function of frequency, time, and pointing at a given reference station in three arrays of shape $(nfreq (fixed to 1024), npointing, ntime)$. In most cases you will have only one pointing, but for widefield VLBI you might want multiple pointings.
-1) $t$, a `float64`, which specifies topocentric Unix time 
-2) $w$, an `int`, which specifies the total width of the integration (<0.5 seconds)
+You will want to set up a `CorrJob` to handle the correlation over all possible baselines. The `CorrJob` will specify the correlation start and stop times as a function of frequency, time, and pointing at a given reference station in three arrays of shape `(nfreq=1024, npointing, ntime)`. In most cases you will have only one pointing, but for widefield VLBI you might want multiple pointings.
+1) $t$, an `astropy.Time`, which specifies topocentric Unix time at the reference station.
+2) $w$, an `int`, which specifies the scan duration. This effectively sets the frequency resolution of the correlation to be $390 * w$ kHz.
 3) $r$, a `float` between 0-1 which specifies the fraction over the integration to correlate (used in pulsar gating mode), centered on `t + 2.56e-6 * w//2`.
 
 ```python
@@ -53,22 +53,27 @@ You will want to set up a `CorrJob` to handle the correlation over all possible 
     # analysis and calibration of visibilities follows hereafter -- see `coda` repo
 ```
 
-If you want to be janky you can directly run `crosscorr_core()` or `autocorr_core()` and accomplish similar things without the `CorrJob` layer
+If you want to do stuff under the hood, you can directly run `crosscorr_core()` or `autocorr_core()` and accomplish similar things without the `CorrJob` interface layer.
 
 # HDF5 Baseband Data Format Specification
-An ideal data format to hold baseband data used in `pyfx` would be 1) easily interpretable by end users and manipulated with custom Python 3 analysis tools, and 2) easily used in established VLBI correlators like `DiFX` and `SFXC`. Unfortunately such a data format does not exist. Baseband data produced by the full-array baseband systems on ICE-based telescopes are saved to `.h5` files, which are then processed by offline (and later, real-time) beamformers using CHIME/FRB's `singlebeam`  or `multibeam` formats, whose data ordering reflects CHIME's FX correlator architecture. The format specification for `singlebeam` data as used by `pyfx` is summarized here. 
+One of the reasons we developed `pyfx` was for native support of the strange data format of CHIME. Since we are working at low frequencies where the DM sweep is long, we need to record the baseband data at reasonably high frequency resolution to follow the long DM sweep. This means we use lots of channels (1024) and no sub-bands, since CHIME directly digitizes the voltage data without using a local oscillator to mix signals down to baseband. These data are saved to `.h5` files, which are then processed by offline (and later, real-time) beamformers. The format specification for `singlebeam` data as used by `pyfx` is summarized here. 
 
-To open `singlebeam` files one can either use `h5py` directly. We discourage this; instead use something like:
+To open `singlebeam` files one can use `h5py` directly to get started. However, slicing data in `pyfx` requires using the `BBData` data format specified in CHIME's `baseband_analysis` repo.
 
 ```python
 from baseband\_analysis.core import BBData
 data_all_freqs = BBData.from_file('/path/to/baseband_EVENTID_*.h5') # to load all frequencies
 data_first_beam = BBData.from_file('/path/to/baseband_EVENTID_*.h5',beam_sel = [0,1]) # to load all frequencies, just one dual-pol beam
+print(data_all_freqs.index_map['freq']['centre']) # what frequency channels do we have?
+print(data_all_freqs['tiedbeam_locations'][:]) # what pointings do we have?
+print(list(data_all_freqs.keys())) # what metadata do we have?
 data_first_three_freqs_explicit = BBData.from_file(['/path/to/baseband_EVENTID_0.h5','/path/to/baseband_EVENTID_1.h5','/path/to/baseband_EVENTID_3.h5']) # to load data from FPGA freq_ids = 0,1,3 explicitly
 data_first_three_freqs_implicit = BBData.from_file('/path/to/baseband_EVENTID_*.h5',freq_sel = [0,1,2]) # to load data implicitly from the first three files available
 ```
 
-As one can see, `caput.memh5` does the I/O management under the hood for us, allowing downselection along arbitrary axes. `BBData.from_file` also:
+As one can see, `caput.memh5` does the I/O management under the hood for us, allowing downselection along arbitrary axes (e.g. `freq_sel` as shown above, but `beam_sel` or `time_sel` also can be used). 
+
+`BBData.from_file` also:
 * Handles the offset encoding of raw baseband data (4 real + 4 imaginary), 
 * Metadata which keep track of sign flips in the complex conjugate convention taken by the beamformer upstream, changing the sign convention when the data are loaded into memory.
 A complete `singlebeam` file should have data and metadata attributes as described below, and `multibeam` files are quite closely related. \textbf{Bolded} refers to features that do not exist or are irrelevant for \texttt{singlebeam} files, but which would be a natural way to extend the data format for the pulsar beam data.
