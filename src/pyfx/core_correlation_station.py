@@ -9,12 +9,15 @@ from astropy.time import Time, TimeDelta
 from decimal import Decimal
 import astropy.units as un
 import time
+from pyfx.fft_corr import basic_correlator as correlator 
+#To use the optimal quadratic etsimator, replace with subframe_signal_to_noise_search_correlator above^
+from pyfx.fft_corr import max_lag_slice
+import pyfx.config as config
 import collections
 from pycalc11 import Calc
 from baseband_analysis.core.bbdata import BBData
 from typing import Optional, Tuple, Union, List
 import logging
-from pyfx.fft_corr import basic_correlator as basic_correlator # could swap out correlator here
 
 K_DM = 1 / 2.41e-4  # in s MHz^2 / (pc cm^-3)
 MAX_FRAC_SAMP_LENGTH=32187 #maximum FFT length, chosen to keep delay rate drift (on Earth) within 1/10th of a frame 
@@ -106,12 +109,12 @@ def autocorr_core(
                 ########## auto-correlate the on-signal ##############
                 for pol_0 in range(n_pol):
                     for pol_1 in range(n_pol):
-                        auto_vis[:, kkpointing, pol_0, pol_1,:,jjscan] = basic_correlator(
+                        auto_vis[:, kkpointing, pol_0, pol_1,:,jjscan] = correlator(
                             scan_a_fs_cd[:, pol_0, start:stop],
                             scan_a_fs_cd[:, pol_1, start:stop],
                             max_lag=max_lag)
-                        '''auto_vis[:, kkpointing, pol_0, pol_1,:,jjscan] = np.concatenate(
-                            (_vis[:,:max_lag+1], _vis[:,-max_lag:]),axis=-1)'''
+                        auto_vis[:, kkpointing, pol_0, pol_1,:,jjscan] = np.concatenate(
+                            (_vis[:,:max_lag+1], _vis[:,-max_lag:]),axis=-1)
             else:
                 for r_ij in r_jjscan:
                     start = int((wij - wij*r_ij) // 2)
@@ -121,12 +124,10 @@ def autocorr_core(
                     for pol_0 in range(n_pol):
                         for pol_1 in range(n_pol):
                             if pol_0 == pol_1:
-                                auto_vis[:, kkpointing, pol_0, pol_1,:,jjscan] = basic_correlator(
+                                auto_vis[:, kkpointing, pol_0, pol_1,:,jjscan] = correlator(
                                     scan_a_fs_cd[:, pol_0, start:stop],
                                     scan_a_fs_cd[:, pol_1, start:stop],
                                     max_lag=max_lag)
-                                '''auto_vis[:, kkpointing, pol_0, pol_1,:,jjscan] = np.concatenate(
-                                    (_vis[:,:max_lag+1], _vis[:,-max_lag:]),axis=-1)'''
          
     return auto_vis
 
@@ -253,7 +254,6 @@ def cross_correlate_baselines(
     pycalc_results: Calc,
     DM: float,
     station_indices: List[int],
-    max_lag: int,
     ref_frame:int,
     sample_rate: float=2.56,
     n_pol: int=2,
@@ -267,6 +267,7 @@ def cross_correlate_baselines(
     ) -> np.ndarray:
     
     n_freqs = np.array([len(bbdata.freq) for bbdata in bbdatas])
+    max_lag = config.CHANNELIZATION['nlags']
     assert len(np.unique(n_freqs))==1,f"There appear to be {n_freqs} frequency channels in each telescope. Please pass in these bbdata objects with frequency channels aligned (i.e. nth index along the frequency axis should correspond to the *same* channel in telescope A and B)"
     n_scan = np.size(t_a, axis=-1)
     # SA: basing this off of how the data is arranged now, may want to change
@@ -300,7 +301,6 @@ def cross_correlate_baselines(
                 DM=DM,
                 index_A=telA,
                 index_B=telB,
-                max_lag=max_lag,
                 ref_frame=ref_frame
             )
             out_cross.append(cross)
@@ -315,7 +315,6 @@ def crosscorr_core(
     DM: float,
     index_A: int,
     index_B: int,
-    max_lag: int,
     ref_frame:int,
     sample_rate: float=2.56,
     n_pol: int=2,
@@ -345,11 +344,7 @@ def crosscorr_core(
     DM : float
         The DM with which the zeroth pointing of the data is de-smeared before the final gating. for continuum sources, set dispersion measure to 0.
     
-    max_lag : int
-        maximum (absolute value) lag (in frames) for auto-correlation (useful for very long time series data). TODO: Outer layer of the code should check that this is less than 1/2 of the window size times R.
-        set this to 20 for a good balance between space efficiency and good noise statistics.
-    
-    bbdata_top : BBData object
+        bbdata_top : BBData object
         bbdata defining topocentric time, if not BBdata A
 
     ref_frame : int
@@ -392,6 +387,7 @@ def crosscorr_core(
     cross_vis :
         array of cross_vis correlation visibilities with shape (nfreq, npointing, npol, npol, nlag,nscan)
     """
+    max_lag = config.CHANNELIZATION['nlags']
     n_freq =bbdata_a_fs.shape[0]
     n_scan = np.size(R, axis=-1)
     # SA: basing this off of how the data is arranged now, may want to change
@@ -435,14 +431,10 @@ def crosscorr_core(
                     ########## cross-correlate the on-signal ##############
                     for pol_0 in range(n_pol):
                         for pol_1 in range(n_pol):
-                            assert not np.isnan(np.min(scan_a_fs_cd[:, pol_0, start:stop].flatten())), "Scan parameters have been poorly defined for telescope A. Please ensure there are no nans in the baseband data"
-                            assert not np.isnan(np.min(scan_b_fs_cd[:, pol_0, start:stop].flatten())), "Scan parameters have been poorly defined for telescope B. Please ensure there are no nans in the baseband data"
-                            cross_vis[:, kkpointing, pol_0, pol_1,:,jjscan] = basic_correlator(
+                            cross_vis[:, kkpointing, pol_0, pol_1,:,jjscan] = correlator(
                                 scan_a_fs_cd[:, pol_0, start:stop],
                                 scan_b_fs_cd[:, pol_1, start:stop],
                                 max_lag=max_lag)
-                            #cross_vis[:, kkpointing, pol_0, pol_1,:,jjscan] = np.concatenate(
-                            #    (_vis[:,:max_lag+1], _vis[:,-max_lag:]),axis=-1)
             else:
                 #loop over frequency channel
                 for freq in range(len(r_jjscan)):
@@ -458,12 +450,10 @@ def crosscorr_core(
                             for pol_1 in range(n_pol):
                                 assert not np.isnan(np.min(scan_a_fs_cd[freq, pol_0, start:stop].flatten())), "Scan parameters have been poorly defined for telescope A. Please ensure there are no nans in the baseband data"
                                 assert not np.isnan(np.min(scan_b_fs_cd[freq, pol_0, start:stop].flatten())), "Scan parameters have been poorly defined for telescope B. Please ensure there are no nans in the baseband data"
-                                cross_vis[freq, kkpointing, pol_0, pol_1, :,jjscan] = basic_correlator(
+                                cross_vis[freq, kkpointing, pol_0, pol_1, :,jjscan] = correlator(
                                     scan_a_fs_cd[freq, pol_0, start:stop],
                                     scan_b_fs_cd[freq, pol_1, start:stop],
                                     max_lag=max_lag)
-                                #cross_vis[freq, kkpointing, pol_0, pol_1, :,jjscan] = np.concatenate(
-                                #    (_vis[:max_lag+1], _vis[-max_lag:]),axis=-1)
 
     return cross_vis
 

@@ -21,8 +21,10 @@ for ii, subframe_delay in enumerate(CHANNELIZATION['search_lags']):
     print(f'Precomputing delay-search PFB coefficients: {ii} of {len(CHANNELIZATION["search_lags"])}')
     SIG_SEARCH_KERNEL[ii,:] = pfb.pfb_window_auto_corr(IVW_LAGS * CHANNELIZATION['lblock'] - subframe_delay, 
     CHANNELIZATION)
+print('Normalizing search coefficients')
+_NORM_SSK = np.mean(SIG_SEARCH_KERNEL**2,axis = -1) / np.mean(SIG_SEARCH_KERNEL[0,:]**2) # standardize noise properties over all sub-frame lags
 CHANNELIZATION['IVW_KERNEL'] = IVW_KERNEL
-CHANNELIZATION['SIG_SEARCH_KERNEL'] = SIG_SEARCH_KERNEL
+CHANNELIZATION['SIG_SEARCH_KERNEL'] = SIG_SEARCH_KERNEL / _NORM_SSK[:,None]
 
 def fft_corr(
     w1: np.ndarray, 
@@ -111,6 +113,7 @@ def subframe_signal_to_noise_search_correlator(data_bb_1, data_bb_2,
     search.
 
     """
+    print('Using search correlator')
     nchan = channelization['nchan']
     nsamp_frame = channelization['lblock']
     n_search_lags = len(channelization['search_lags'])
