@@ -4,7 +4,7 @@ import h5py
 import numpy as np
 
 def station_from_bbdata(bbdata,
-    method='gains'
+    method='index_map'
     ):
     """Returns station name for use with difxcalc"""
     if method == 'index_map':
