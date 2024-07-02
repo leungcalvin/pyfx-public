@@ -70,15 +70,6 @@ def validate_wij(w_ij, t_ij, r_ij, dm=None):
     return w_ij
 
 class CorrJob:
-    
-    correlator_gating_dtypes = {
-            ("gate_start_unix", "<f8"),
-            ("gate_start_unix_offset", "<f8"),
-            ("gate_start_frame", "<i4"),
-            ("duration_frames", "<i4"),
-            ("dur_ratio", "<f8"),
-            ("on_window", bool),
-    }
     def __init__(
         self, 
         bbdatas: List[BBData],
