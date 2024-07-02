@@ -70,10 +70,20 @@ def validate_wij(w_ij, t_ij, r_ij, dm=None):
     return w_ij
 
 class CorrJob:
+    
+    correlator_gating_dtypes = {
+            ("gate_start_unix", "<f8"),
+            ("gate_start_unix_offset", "<f8"),
+            ("gate_start_frame", "<i4"),
+            ("duration_frames", "<i4"),
+            ("dur_ratio", "<f8"),
+            ("on_window", bool),
+    }
     def __init__(
         self, 
-        bbdata_filepaths, 
+        bbdatas: List[BBData],
         telescopes:List[ac.earth.EarthLocation], 
+        bbdata_filepaths:Optional[List[str]]=None, 
         ref_station:Optional[str]='chime',
         ras = None, 
         decs = None,
@@ -86,27 +96,50 @@ class CorrJob:
         Given a set of BBData objects, define N * (N-1) / 2 baselines.
         Use run_difxcalc and save to self.pycalc_results so we only call difxcalc ONCE in the whole correlator job.
         """
-        self.tel_names= []
-        for path in bbdata_filepaths:
-            self.tel_names.append(
-                station_from_bbdata(
-                    BBData.from_file(
-                        path,
-                        freq_sel = [0,-1],
+        self.station_names= []
+        self.bbdatas = bbdatas
+        # get tel names
+        for i,this_bbdata in enumerate(bbdatas):
+            tel_name=station_from_bbdata(
+                    this_bbdata
                     )
+            self.station_names.append(
+                    tel_name
                 )
-            )
-        self.tel_names = sorted(self.tel_names) # sort tel_names alphabetically; this becomes the difxcalc antenna index mapping
+            if tel_name != telescopes[i].info.name:
+                print(f"warning: telescope name {telescopes[i].info.name} from input telescopes does not correspond to telescope name {tel_name} from bbdata. Please check that your input parameters are identically ordered.")
         self.telescopes = telescopes 
-        self.bbdata_filepaths = [bbdata_filepaths[ii] for ii in np.argsort(self.tel_names)] 
-        bbdata_0 = BBData.from_file(bbdata_filepaths[0],freq_sel=[0,-1])
+        self.ref_station=ref_station
+        ref_index=self.station_names.index(ref_station)
+        self.ref_index=ref_index
+        bbdata_top = self.bbdatas[self.ref_index]
+
+        earliest_start_unix = np.inf
+        latest_end_unix = -np.inf
+
+        # loop again to check data format specifications
+        for i,this_bbdata in enumerate(bbdatas):
+            assert same_pointing(bbdata_top,this_bbdata)
+            earliest_start_unix = min(earliest_start_unix,
+                this_bbdata['time0']['ctime'][0])
+            latest_end_unix = max(latest_end_unix, 
+                this_bbdata['time0']['ctime'][-1] + this_bbdata.ntime)
+            if i==ref_index:
+                self.ref_ctimes=this_bbdata['time0']['ctime']
+                self.ref_ctime_offsets=this_bbdata['time0']['ctime_offset']
+            if this_bbdata.nfreq<1024:
+                fill_waterfall(this_bbdata, write=True)
+
+        earliest_start_unix = int(earliest_start_unix - 1) # buffer
+        duration_min = 3 #max(int(np.ceil(int(latest_end_unix - earliest_start_unix + 1.0 )/60)),1)
         # Get pointing centers from reference station, if needed.
         if ras is None:
-            ras = bbdata_0['tiedbeam_locations']['ra'][:]
+            ras = bbdata_top['tiedbeam_locations']['ra'][:]
         if decs is None:
-            decs = bbdata_0['tiedbeam_locations']['dec'][:]
+            decs = bbdata_top['tiedbeam_locations']['dec'][:]
         if source_names is None:
-            source_names = bbdata_0['tiedbeam_locations']['source_name'][:]
+            source_names = bbdata_top['tiedbeam_locations']['source_name'][:]
+        
         self.ras = np.atleast_1d(ras)
         self.decs = np.atleast_1d(decs)
         self.source_names = np.atleast_1d(source_names)
@@ -114,26 +147,8 @@ class CorrJob:
         assert len(ras)==len(source_names), "number of pointings is not consistent between ras and source_names!"
         self.pointings = ac.SkyCoord(ra=self.ras.flatten() * un.deg, dec=self.decs.flatten() * un.deg)
 
-        ref_index=self.tel_names.index(ref_station)
-        self.ref_station=ref_station
-        earliest_start_unix = np.inf
-        latest_end_unix = -np.inf
-        for i in range(len(bbdata_filepaths)):
-            filepath=bbdata_filepaths[i]
-            this_bbdata = BBData.from_file(filepath)#,freq_sel = [0,-1])
-            assert same_pointing(bbdata_0,this_bbdata)
-            earliest_start_unix = min(earliest_start_unix,
-                this_bbdata['time0']['ctime'][0])
-            latest_end_unix = max(latest_end_unix, 
-                this_bbdata['time0']['ctime'][-1] + this_bbdata.ntime)
-            if i==ref_index:
-                fill_waterfall(this_bbdata, write=True)
-                self.ref_ctimes=this_bbdata['time0']['ctime']
-                self.ref_ctime_offsets=this_bbdata['time0']['ctime_offset']
-        earliest_start_unix = int(earliest_start_unix - 1) # buffer
-        duration_min = 3 #max(int(np.ceil(int(latest_end_unix - earliest_start_unix + 1.0 )/60)),1)
         ci = Calc(
-                station_names=[tel.info.name for tel in self.telescopes],
+                station_names=self.station_names,
                 station_coords=self.telescopes,
                 source_coords=self.pointings,
                 start_time=Time(np.floor(earliest_start_unix), format = 'unix', precision = 9),
@@ -148,11 +163,15 @@ class CorrJob:
         return 
 
 
-    def t0_f0_from_bbdata_filename(self,t0f0,bbdata_ref_filename):
+    def t0_f0_from_bbdata_filename(self,
+        t0f0:Tuple[str],
+        bbdata_ref_filename:str
+        ):
         """ Returns the actual t00 and f0 from bbdata_ref.
 
         This allows you to specify, e.g. the "start" of the dump at the "top" of the band by passing in ("start","top").
-
+        t0f0: tuple specifying start/middle of the dump in time and top/bottom of the frequency band
+        bbdata_ref_filename: name of filename
         """
 
         (_t0, _f0) = t0f0
@@ -220,7 +239,6 @@ class CorrJob:
         else:
             assert t_ij is not None, "t_ij (np.ndarray of start indices of shape [nfreq,npointing,nscan]) must be passed in if freq_offset_mode is not dm!"
         
-        self.t_a_type='frame'
 
         # If _ti0 is a TOA, need to shift _ti0 back by half a scan length 
         if start_or_toa == 'toa':
@@ -294,20 +312,22 @@ class CorrJob:
         self.tij_sp = tij_sp
         return tij_sp
 
+
     def visualize_twr_sea(self,
-    bbdata_A,
-    wfall,
-    t,w,r,
-    t_a_type:Optional[str]=None,
-    iiref=0,
-    pointing = 0,
-    dm = None,
-    fscrunch = 4, 
-    tscrunch = None,
-    vmin=0,vmax=1,
-    xpad=None,
-    out_file:Optional[str]=None,
-    bad_rfi_channels=None):
+        bbdata_A,
+        wfall,
+        gate_start_frame,
+        w,
+        r,
+        iiref=0,
+        pointing = 0,
+        dm = None,
+        fscrunch = 4, 
+        tscrunch = None,
+        vmin=0,vmax=1,
+        xpad=None,
+        out_file:Optional[str]=None,
+        bad_rfi_channels=None):
         wwfall = np.abs(wfall)**2
         wwfall -= np.nanmedian(wwfall,axis = -1)[:,:,None]
         wwfall /= median_abs_deviation(wwfall,axis = -1,nan_policy='omit')[:,:,None]
@@ -315,8 +335,7 @@ class CorrJob:
             tscrunch = int((np.median(w) // 10 ))
         sww = _scrunch(wwfall,fscrunch = fscrunch, tscrunch = tscrunch)
         del wwfall
-        if t_a_type is None:
-            t_a_type=self.t_a_type
+
         y = np.arange(1024)
         for iiscan in range(t.shape[-1]):
             f = plt.figure()
@@ -324,10 +343,8 @@ class CorrJob:
             waterfall-=np.nanmedian(waterfall)
             plt.imshow(waterfall,aspect = 'auto',vmin = vmin,vmax = vmax,interpolation = 'none')
 
-            if t_a_type=='unix':
-                x_start = (t[:,pointing,iiscan]- bbdata_A['time0']['ctime'][:]).sec/ (2.56e-6 * tscrunch)
-            else:
-                x_start = t[:,pointing,iiscan]/ (tscrunch)
+            x_start = gate_start_frame[:,pointing,iiscan]/ (tscrunch)
+            
             x_end = x_start + w[pointing,iiscan] / tscrunch
             x_mid = x_start + (x_end - x_start) * 0.5 
             x_rminus = x_mid - (x_end - x_start) * 0.5 * r[:,pointing,iiscan]
@@ -346,11 +363,11 @@ class CorrJob:
             plt.plot(x_rplus, y/fscrunch,linestyle = '-.',color = 'red',lw=1) # shade t + w/2 + r/2
             plt.legend(loc='lower right')
             if t_a_type=='unix':
-                xmin = np.nanmin((t[:,pointing,:] - bbdata_A['time0']['ctime'][:,None]).sec,axis = -1) / (2.56e-6 * tscrunch)
-                xmax = np.nanmax((t[:,pointing,:] - bbdata_A['time0']['ctime'][:,None]).sec,axis = -1) / (2.56e-6 * tscrunch)
+                xmin = np.nanmin((gate_start_frame[:,pointing,:] - bbdata_A['time0']['ctime'][:,None]).sec,axis = -1) / (2.56e-6 * tscrunch)
+                xmax = np.nanmax((gate_start_frame[:,pointing,:] - bbdata_A['time0']['ctime'][:,None]).sec,axis = -1) / (2.56e-6 * tscrunch)
             else:
-                xmin = np.nanmin(t[:,pointing,:],axis = -1) / (tscrunch)
-                xmax = np.nanmax(t[:,pointing,:],axis = -1) / (tscrunch)
+                xmin = np.nanmin(gate_start_frame[:,pointing,:],axis = -1) / (tscrunch)
+                xmax = np.nanmax(gate_start_frame[:,pointing,:],axis = -1) / (tscrunch)
             if xpad is not None:
                 plt.xlim(np.nanmedian(xmin)-xpad,np.nanmedian(xmax)+xpad)
             plt.ylim(1024 / fscrunch,0)
@@ -360,7 +377,17 @@ class CorrJob:
                 fig.savefig(out_file,bbox_inches='tight')
         del bbdata_A
         return f
-    def run_correlator_job(self,t_ij, w_ij, r_ij, t_a_type:Optional[str]=None,dm = None, event_id = None, out_h5_file = None):
+
+
+
+    def run_correlator_job(
+        self,
+        gate_start_frame, 
+        w_ij, 
+        r_ij, 
+        dm = None, 
+        event_id = None, 
+        out_h5_file = None):
         """Run auto- and cross- correlations.
 
         Loops over baselines, then frequencies, which are all read in at once and ordered using fill_waterfall. This works well on short baseband dumps. 
@@ -369,8 +396,8 @@ class CorrJob:
 
         Parameters
         ----------
-        t_ij : np.ndarray
-            Of topocentric start times as a function of (n_station, n_freq, n_pointing, n_time)
+        gate_start_frame : np.ndarray
+            Of topocentric start indices for the on-signal gating relative to the start of the dump as a function of (n_station, n_freq, n_pointing, n_time)
         w_ij : np.ndarray
             Of start times as a function of (n_pointing, n_time)
         r_ij : np.ndarray
@@ -391,42 +418,41 @@ class CorrJob:
         fill_waterfall(bbdata_top, write = True)
 
         tel_bbdatas=[]
-        if t_a_type is None:
-            t_a_type=self.t_a_type
+
         for iia in range(len(self.tel_names)):
             bbdata_a = BBData.from_file(self.bbdata_filepaths[iia])
             fill_waterfall(bbdata_a, write = True)
             tel_bbdatas.append(bbdata_a)
             logging.info(bbdata_a['tiedbeam_baseband'].shape)
-            if t_a_type=='unix':
-                indices = np.round((t_ij[iia] - bbdata_a['time0']['ctime'][:,None,None]) / 2.56e-6).astype(int) # shape is (nfreq, npointing, nscan)
-            else:
-                indices = t_ij[iia]
+
+            assert np.issubdtype(gate_start_frame.dtype, np.integer), "gate_start_frame must be an integer start frame"
+            gate_start_frame_tel = gate_start_frame[iia] #extract start frame for station
             if iia==ref_index:
-                t_a_indices=indices
+                gate_start_frame_top=gate_start_frame_tel
             # there are scans with missing data: check the start and end index
-            mask_a = (indices < 0) + (indices  + w_ij[None,:,:] > bbdata_a.ntime) 
-            print(mask_a.shape)
-            indices[mask_a] = int(bbdata_a.ntime // 2)
+            mask_a = (gate_start_frame_tel < 0) + (gate_start_frame_tel  + w_ij[None,:,:] > bbdata_a.ntime) 
+
+            gate_start_frame_tel[mask_a] = int(bbdata_a.ntime // 2)
             # ...but we just let the correlator correlate
             logging.info(f'Calculating autos for station {iia}')
             auto_vis = autocorr_core(DM=dm, bbdata_a=bbdata_a, 
-                                    t_a = indices,
+                                    t_a = gate_start_frame_tel,
                                     window = w_ij,
                                     R = r_ij,
                                     max_lag = self.max_lag, 
                                     n_pol = 2)
             # ...and replace with nans afterward.
             auto_vis += mask_a[:,:,None,None,None,:] * np.nan # fill with nans where
-            t_a=bbdata_a['time0']['ctime'][:,np.newaxis,np.newaxis]*np.ones(indices.shape)
-            t_a_offset=bbdata_a['time0']['ctime_offset'][:,np.newaxis,np.newaxis]+indices*2.56e-6
+            gate_start_unix=bbdata_a['time0']['ctime'][:,np.newaxis,np.newaxis]*np.ones(gate_start_frame_tel.shape)
+            gate_start_unix_offset=bbdata_a['time0']['ctime_offset'][:,np.newaxis,np.newaxis]+gate_start_frame_tel*2.56e-6
             output._from_ndarray_station(
                 event_id,
                 telescope = self.telescopes[iia],
                 bbdata = bbdata_a,
                 auto = auto_vis,
-                t_a=t_a,
-                t_a_offset=t_a_offset,
+                gate_start_frame=gate_start_frame_tel,
+                gate_start_unix=gate_start_unix,
+                gate_start_unix_offset=gate_start_unix_offset,
                 window=w_ij,
                 r=r_ij,
                 )
@@ -435,7 +461,7 @@ class CorrJob:
         cross = cross_correlate_baselines(
                 bbdatas=tel_bbdatas,
                 bbdata_top=bbdata_top,
-                t_a=t_a_indices,
+                t_a_top=gate_start_frame_top,
                 window=w_ij,
                 R=r_ij,
                 pycalc_results=self.pycalc_results,
@@ -457,8 +483,8 @@ class CorrJob:
                     telescope_a=self.telescopes[telA],
                     telescope_b=self.telescopes[telB],
                     cross=cross[m], 
-                    t_a=bbdata_top["time0"]["ctime"][:,np.newaxis,np.newaxis]*np.ones(indices.shape),
-                    t_a_offset=bbdata_top["time0"]["ctime_offset"][:,np.newaxis,np.newaxis]+indices*2.56e-6,
+                    t_a=bbdata_top["time0"]["ctime"][:,np.newaxis,np.newaxis]*np.ones(gate_start_frame_tel.shape),
+                    t_a_offset=bbdata_top["time0"]["ctime_offset"][:,np.newaxis,np.newaxis]+gate_start_frame_tel*2.56e-6,
                     window=w_ij,
                     r=r_ij
                 )

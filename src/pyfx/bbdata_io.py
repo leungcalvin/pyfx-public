@@ -1,10 +1,12 @@
 """Utilities for reading BBData without loading in the full dataset."""
 
 import h5py
+import numpy as np
 
-def station_from_bbdata(bbdata):
+def station_from_bbdata(bbdata,
+    method='gains'
+    ):
     """Returns station name for use with difxcalc"""
-    method = 'index_map'
     if method == 'index_map':
         first_three_inputs = [s.decode('utf-8')[0:3] for s in bbdata.index_map['input']['correlator_input'][0:3]]
         prefixes = {'FCC':'chime',
@@ -19,9 +21,10 @@ def station_from_bbdata(bbdata):
     if method == 'gains':
         names = {'kko':'kko',
                  'pco':'kko',
-                 'chime':'chime',
                  'tone':'tone',
-                 'gbo':'gbo'}
+                 'gbo':'gbo',
+                 'chime':'chime',
+                 }
         for key in names.keys():
             if key in bbdata.attrs['cal_h5']:
                 return names[key]
@@ -43,6 +46,15 @@ def get_all_im_freq(bbdata_filename, method = 'single'):
     if method == 'multiple':
         raise NotImplementedError('Should probably grep the filepath for something like baseband_XXX_FREQID and read them in a loop')
 
+def get_multibeam_pointing(bbdata_multibeam_filename, method = 'single'):
+    """Bypass caput slicing to read data.index_map['freq']"""
+    if method == 'single': # only handle all frequencies in a single file for now. TODO: do this with a caput Reader.
+        with h5py.File(bbdata_multibeam_filename,mode = 'r') as f:
+            return f['tiedbeam_locations'][:].copy() #(ra,dec,...)
+    if method == 'multiple':
+        raise NotImplementedError('Should probably grep the filepath for something like baseband_XXX_FREQID and read them in a loop')
+
+
 def choose_beam_idx_from_pointing(pointing_ra, pointing_dec, tiedbeam_ra, tiedbeam_dec,tolerance_deg = 2/60):
     assert type(pointing_ra) is float, "One pointing a time!"
     assert type(pointing_dec) is float, "One pointing at a time!"
@@ -54,3 +66,20 @@ def get_ntime(bbdata_filename):
     with h5py.File(bbdata_filename, mode = 'r') as f:
         return f['tiedbeam_baseband'].shape[-1]
     return 
+
+
+def get_pointing_index(
+    ra:float,
+    dec:float,
+    pointings_tel:np.ndarray
+):
+    """
+    Get index/indices of multibeam data corresponding to specified ra and dec
+    """
+    dec=pointings_tel['dec'][0]
+    ra=pointings_tel['ra'][0]
+    dec_matches=np.isclose(pointings_tel['dec'],dec,rtol=.1/3600) #should be the same to 100mas"
+    ra_matches=np.isclose(pointings_tel['ra'],ra,rtol=.1/(3600*np.cos(np.deg2rad(dec)))) #should be the same to 100mas"
+    indices=np.where((ra_matches)&(dec_matches))[0]
+    return indices
+

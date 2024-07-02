@@ -1,7 +1,7 @@
 """
-Fringestops all input *stations* and cross correlates baseband data over *all* N(N-1)/2 baselines
-The "core" module that should be called by the "outer layer" corr_job.py
-All bugs are the responsibility of Shion Andrew   
+Identical to core_correlation, but uses gpus. Still W.I.P.
+Fringestops station B to station A and cross correlates baseband data from station A and B. 
+Written by Shion Andrew  
 """
 
 import numpy as np
@@ -15,9 +15,12 @@ from baseband_analysis.core.bbdata import BBData
 from typing import Optional, Tuple, Union, List
 import logging
 from pyfx.fft_corr import basic_correlator as basic_correlator # could swap out correlator here
+from pyfx.core_math_torch import fft_corr_gpu
+import torch
 
 K_DM = 1 / 2.41e-4  # in s MHz^2 / (pc cm^-3)
 MAX_FRAC_SAMP_LENGTH=32187 #maximum FFT length, chosen to keep delay rate drift (on Earth) within 1/10th of a frame 
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 def autocorr_core(
@@ -110,8 +113,7 @@ def autocorr_core(
                             scan_a_fs_cd[:, pol_0, start:stop],
                             scan_a_fs_cd[:, pol_1, start:stop],
                             max_lag=max_lag)
-                        '''auto_vis[:, kkpointing, pol_0, pol_1,:,jjscan] = np.concatenate(
-                            (_vis[:,:max_lag+1], _vis[:,-max_lag:]),axis=-1)'''
+
             else:
                 for r_ij in r_jjscan:
                     start = int((wij - wij*r_ij) // 2)
@@ -125,8 +127,7 @@ def autocorr_core(
                                     scan_a_fs_cd[:, pol_0, start:stop],
                                     scan_a_fs_cd[:, pol_1, start:stop],
                                     max_lag=max_lag)
-                                '''auto_vis[:, kkpointing, pol_0, pol_1,:,jjscan] = np.concatenate(
-                                    (_vis[:,:max_lag+1], _vis[:,-max_lag:]),axis=-1)'''
+
          
     return auto_vis
 
@@ -247,7 +248,7 @@ def fringestop_station(
 def cross_correlate_baselines(
     bbdatas: List[BBData],
     bbdata_top: BBData,
-    t_a_top: np.ndarray,
+    t_a: np.ndarray,
     window: np.ndarray,
     R: np.ndarray,
     pycalc_results: Calc,
@@ -268,7 +269,7 @@ def cross_correlate_baselines(
     
     n_freqs = np.array([len(bbdata.freq) for bbdata in bbdatas])
     assert len(np.unique(n_freqs))==1,f"There appear to be {n_freqs} frequency channels in each telescope. Please pass in these bbdata objects with frequency channels aligned (i.e. nth index along the frequency axis should correspond to the *same* channel in telescope A and B)"
-    n_scan = np.size(t_a_top, axis=-1)
+    n_scan = np.size(t_a, axis=-1)
     # SA: basing this off of how the data is arranged now, may want to change
     n_pointings = bbdatas[0]["tiedbeam_baseband"].shape[1] // n_pol
 
@@ -280,7 +281,7 @@ def cross_correlate_baselines(
     for i in range(len(bbdatas)):
         bbdatas[i]['tiedbeam_baseband'][:]=np.nan_to_num(bbdatas[i]['tiedbeam_baseband'][:], nan=0, posinf=0, neginf=0)
         bbdata_fs=fringestop_station(
-            bbdata=bbdatas[i],bbdata_top=bbdata_top,t_a=t_a_top,window=window,R=R,pycalc_results=pycalc_results,
+            bbdata=bbdatas[i],bbdata_top=bbdata_top,t_a=t_a,window=window,R=R,pycalc_results=pycalc_results,
             station_index=station_indices[i],ref_frame=ref_frame,sample_rate=sample_rate,n_pol=n_pol,complex_conjugate_convention=complex_conjugate_convention,
             intra_channel_sign=intra_channel_sign)
         fringestopped_stations.append(bbdata_fs)
@@ -441,8 +442,8 @@ def crosscorr_core(
                                 scan_a_fs_cd[:, pol_0, start:stop],
                                 scan_b_fs_cd[:, pol_1, start:stop],
                                 max_lag=max_lag)
-                            #cross_vis[:, kkpointing, pol_0, pol_1,:,jjscan] = np.concatenate(
-                            #    (_vis[:,:max_lag+1], _vis[:,-max_lag:]),axis=-1)
+
+
             else:
                 #loop over frequency channel
                 for freq in range(len(r_jjscan)):
@@ -462,8 +463,7 @@ def crosscorr_core(
                                     scan_a_fs_cd[freq, pol_0, start:stop],
                                     scan_b_fs_cd[freq, pol_1, start:stop],
                                     max_lag=max_lag)
-                                #cross_vis[freq, kkpointing, pol_0, pol_1, :,jjscan] = np.concatenate(
-                                #    (_vis[:max_lag+1], _vis[-max_lag:]),axis=-1)
+
 
     return cross_vis
 
