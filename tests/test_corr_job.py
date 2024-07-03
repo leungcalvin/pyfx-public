@@ -5,13 +5,12 @@ from baseband_analysis.core import BBData
 from baseband_analysis.core.sampling import fill_waterfall
 from astropy.time import Time,TimeDelta
 import scipy
-from pyfx import corr_job
-from pyfx import corr_job_station 
+from pyfx import corr_job_station as corr_job
 from pycalc11 import Calc
 from pyfx.core_vis import extract_subframe_delay, extract_frame_delay
 import logging
-chime_file='/arc/projects/chime_frb/shiona/public/pyfx_test_files/astro_256150292_multibeam_LOFAR_L725386_24.2440833_47.8580556_chime.h5'
-kko_file='/arc/projects/chime_frb/shiona/public/pyfx_test_files/astro_256150292_multibeam_LOFAR_L725386_24.2440833_47.8580556_kko.h5'
+chime_file='/arc/projects/chime_frb/pyfx_test_files/astro_256150292_multibeam_LOFAR_L725386_24.2440833_47.8580556_chime.h5'
+kko_file='/arc/projects/chime_frb/pyfx_test_files/astro_256150292_multibeam_LOFAR_L725386_24.2440833_47.8580556_kko.h5'
 FLOAT64_PRECISION = 2 * 2**-22 #our times should be this good: https://www.leebutterman.com/2021/02/01/store-your-unix-epoch-times-as-float64.html
 
 chime = ac.EarthLocation.from_geocentric(
@@ -35,14 +34,14 @@ def test_corr_job_runs_filled():
     telescopes = [chime,kko]
     fill_waterfall(chime_bbdata, write=True)
     fill_waterfall(out_bbdata, write=True)
-    ncp_job = corr_job.CorrJob([chime_file,kko_file],telescopes=telescopes,
+    ncp_job = corr_job.CorrJob([chime_bbdata,out_bbdata],telescopes=telescopes,
         ras = ra,
         decs = dec,
-        source_names=np.atleast_1d(["NCP"])
+        source_names=np.atleast_1d(["NCP"]),
+        ref_station = 'chime',
         )
 
     t,w,r = ncp_job.define_scan_params(
-        ref_station = 'chime',
         start_or_toa = 'start',
         t0f0 = ('start','top'),
         time_spacing = 'even',
@@ -66,7 +65,7 @@ def test_corr_job_runs_no_fill():
     ra=np.atleast_1d(chime_bbdata['tiedbeam_locations']['ra'][0])
     dec=np.atleast_1d(chime_bbdata['tiedbeam_locations']['dec'][0])
     telescopes = [chime,kko]
-    ncp_job = corr_job.CorrJob([chime_file,kko_file],telescopes=telescopes,
+    ncp_job = corr_job.CorrJob([chime_bbdata,out_bbdata],telescopes=telescopes,
         ras = ra,
         decs = dec,
         source_names=np.atleast_1d(["NCP"])
@@ -98,8 +97,8 @@ def test_pulsar_pycalc_corrjob():
     Run this on CANFAR in a container containing pycalc, pyfx, and baseband-analysis.
     """
     telescopes = [chime,kko]
-    chime_file='/arc/projects/chime_frb/shiona/public/pyfx_test_files/304050301_target_B0355+54_chime.h5'
-    kko_file='/arc/projects/chime_frb/shiona/public/pyfx_test_files/304050301_target_B0355+54_kko.h5'
+    chime_file='/arc/projects/chime_frb/pyfx_test_files/304050301_target_B0355+54_chime.h5'
+    kko_file='/arc/projects/chime_frb/pyfx_test_files/304050301_target_B0355+54_kko.h5'
     chime_bbdata = BBData.from_file(chime_file)
     out_bbdata = BBData.from_file(kko_file)
     fill_waterfall(chime_bbdata, write=True)
@@ -107,7 +106,7 @@ def test_pulsar_pycalc_corrjob():
     ra=np.atleast_1d(chime_bbdata['tiedbeam_locations']['ra'][0])
     dec=np.atleast_1d(chime_bbdata['tiedbeam_locations']['dec'][0])
     print('ra,dec:',ra,dec)
-    pulsar_job = corr_job.CorrJob([chime_file,kko_file],telescopes=telescopes,
+    pulsar_job = corr_job.CorrJob([chime_bbdata,out_bbdata],telescopes=telescopes,
        ras = ra,
        decs = dec,
        source_names=np.atleast_1d('B0355+54')
@@ -163,8 +162,8 @@ def test_pulsar_pycalc_corrjob():
 def test_continuum_calibrator_corrjob():
     # note: dry_atm matters in delay model, values below are for dry_atm=True,wet_atm=True
     telescopes = [chime,kko]
-    chime_file='/arc/projects/chime_frb/shiona/public/pyfx_test_files/J0117+8928_chime.h5' 
-    kko_file='/arc/projects/chime_frb/shiona/public/pyfx_test_files/J0117+8928_kko.h5'
+    chime_file='/arc/projects/chime_frb/pyfx_test_files/J0117+8928_chime.h5' 
+    kko_file='/arc/projects/chime_frb/pyfx_test_files/J0117+8928_kko.h5'
     chime_bbdata = BBData.from_file(chime_file)
     out_bbdata = BBData.from_file(kko_file)
 
@@ -176,14 +175,14 @@ def test_continuum_calibrator_corrjob():
     source_names = np.array(['J0117+8928'])
     bbatas=[chime_bbdata,out_bbdata]
 
-    ss_job = corr_job_station.CorrJob(bbatas,telescopes=telescopes,ras=ras,decs=decs,source_names=source_names)
+    ss_job = corr_job.CorrJob(bbatas,telescopes=telescopes,ras=ras,decs=decs,source_names=source_names)
     from pyfx.twr_utils import get_tw_frame_continuum
     tt,ww,rr=get_tw_frame_continuum(ss_job.bbdatas[0],pad=0)
     tt_station=[tt,tt] # ¯\_(ツ)_/¯ only matters for autos
 
     vis = ss_job.run_correlator_job(tt_station,ww,rr,dm=0,out_h5_file = False)
 
-    cross=copy.deepcopy(vis['chime-kko']['vis'][:])
+    cross=vis['chime-kko']['vis'][:]
 
     ### rfi flagging
     cutoff_00=np.median(np.median(np.abs(cross[:,0,0,0,:,0])**2,axis=-1))+1*scipy.stats.median_abs_deviation(np.median(np.abs(cross[:,0,0,0,:,0])**2,axis=-1))

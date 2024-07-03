@@ -41,4 +41,10 @@ def test_getitem_zp1d_advanced():
     # data out
     assert np.allclose(getitem_zp1d(arr, 200,210),np.zeros(10,dtype = complex))
 
-    
+def test_ctime2atime():
+    from astropy.time import Time
+    from pyfx.corr_job_station import ctimeo2atime, atime2ctimeo
+    aa =Time(val = 1719999940, val2 = 0.1234567890,format='unix')
+    bb = ctimeo2atime(*atime2ctimeo(ctimeo2atime(*atime2ctimeo(aa))))
+    assert np.isclose(bb.to_value('unix','long'),aa.to_value('unix','long'))
+    assert np.isclose(bb.to_value('unix','float'),aa.to_value('unix','float'))
