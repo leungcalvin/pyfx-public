@@ -161,8 +161,8 @@ def test_continuum_calibrator():
         start_time=start_time,
         duration_min=1,
         base_mode='geocenter', 
-        dry_atm=False, 
-        wet_atm=False,
+        dry_atm=True, 
+        wet_atm=True,
         d_interval=1,
     )
     ci.run_driver()
@@ -193,8 +193,8 @@ def test_continuum_calibrator():
     print('test_continuum_calibrator() snr:',snrs)
     print('test_continuum_calibrator() delays:',delays)
 
-    assert np.isclose(delays[0,0],-0.2521875,rtol=1e-05), "delays[0,0] wrong!" #should be good to sub nanosecond
-    assert np.isclose(delays[1,1],-0.25078125,rtol=1e-05), "delays[1,1] wrong!" #should be good to sub nanosecond
+    assert np.isclose(delays[0,0],-0.2525,rtol=1e-05), "delays[0,0] wrong!" #should be good to sub nanosecond
+    assert np.isclose(delays[1,1],-0.25109375,rtol=1e-05), "delays[1,1] wrong!" #should be good to sub nanosecond
     assert snrs[0,0]>=70, f"fringe signal to noise is below expected value in 0,0 pol, expected (70,54), got ({snrs[0,0]},{snrs[1,1]})"
     assert snrs[1,1]>=54, f"fringe signal to noise is below expected value in 1,1 pol,expected (70,54), got ({snrs[0,0]},{snrs[1,1]})"
 

@@ -3,6 +3,48 @@
 import h5py
 import numpy as np
 
+from typing import List
+from baseband_analysis.core.sampling import fill_waterfall
+
+def get_bbdatas_from_index(
+    tel_beamformed_dirs:List[str],
+    tel_a_n:int,
+    fill_freqs:bool=False,
+):
+    ## assuming 0th index is telescope A, although this doesn't really matter much
+    tel_bbdatas=[]
+    bbdata_a=extract_singlebeam(tel_beamformed_dir=tel_a_beamformed_dir,n=tel_a_n)
+    
+    ra=bbdata_a['tiedbeam_locations']['ra'][0]
+    dec=bbdata_a['tiedbeam_locations']['dec'][0]
+    
+    tel_bbdatas=get_bbdatas_from_pointing(tel_beamformed_dirs=tel_beamformed_dirs[1:],ra=ra,dec=dec,fill_freqs=fill_freqs)
+    if fill_freqs:
+        fill_waterfall(bbdata_a,write=True)
+    tel_bbdatas.insert(0,bbdata_a) #insert bbdata_a to 0th index
+    return tel_bbdatas
+
+
+def get_bbdatas_from_pointing(
+    tel_beamformed_dirs:List[str],
+    ra:float,
+    dec:float,
+    fill_freqs:bool,
+):
+    ## assuming 0th index is telescope A, although this doesn't really matter much
+    tel_bbdatas=[]
+    for tel_beamformed_dir in tel_beamformed_dirs:
+        tel_b_file=glob(tel_beamformed_dir)[0]
+        pointings_b=get_multibeam_pointing(tel_b_file)
+        tel_b_n=get_pointing_index(ra=ra,dec=dec,pointings_tel=pointings_b)
+        assert len(tel_b_n)>0, f"no tiedbeam pointing matching telescope a beamformed data from data in {tel_beamformed_dir}"
+        bbdata_b=extract_singlebeam(tel_beamformed_dir=tel_b_beamformed_dir,n=tel_b_n[0])
+        if fill_freqs:
+            fill_waterfall(bbdata_b,write=True)
+        tel_bbdatas.append(bbdata_b)
+    return tel_bbdatas
+
+
 def station_from_bbdata(bbdata,
     method='index_map'
     ):

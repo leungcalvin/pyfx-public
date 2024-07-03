@@ -134,7 +134,7 @@ class CorrJob:
         self.source_names = np.atleast_1d(source_names)
         assert len(ras)==len(decs), "number of pointings is not consistent between ras and decs!"
         assert len(ras)==len(source_names), "number of pointings is not consistent between ras and source_names!"
-        self.pointings = ac.SkyCoord(ra=self.ras.flatten() * un.deg, dec=self.decs.flatten() * un.deg)
+        self.pointings = ac.SkyCoord(ra=self.ras.flatten() * un.deg, dec=self.decs.flatten() * un.deg, frame='icrs')
         duration_min=1
         ci = Calc(
                 station_names=self.tel_names,

@@ -26,6 +26,7 @@ kko = ac.EarthLocation.from_geocentric(
     z = (4821611.987-3.078) * un.m) 
 kko.info.name = 'kko'
 
+
 def test_corr_job_runs_filled():
     chime_bbdata = BBData.from_file(chime_file)
     out_bbdata = BBData.from_file(kko_file)
@@ -157,3 +158,58 @@ def test_pulsar_pycalc_corrjob():
     
     assert snrs_pycalc[0,0]>=30, f"fringe signal to noise is below expected value in 0,0 pol, got {snrs_pycalc[0,0]}"
     assert snrs_pycalc[1,1]>=27, f"fringe signal to noise is below expected value in 1,1 pol, got {snrs_pycalc[1,1]}"
+
+
+def test_continuum_calibrator_corrjob():
+    # note: dry_atm matters in delay model, values below are for dry_atm=True,wet_atm=True
+    telescopes = [chime,kko]
+    chime_file='/arc/projects/chime_frb/shiona/public/pyfx_test_files/J0117+8928_chime.h5' 
+    kko_file='/arc/projects/chime_frb/shiona/public/pyfx_test_files/J0117+8928_kko.h5'
+    chime_bbdata = BBData.from_file(chime_file)
+    out_bbdata = BBData.from_file(kko_file)
+
+    fill_waterfall(chime_bbdata, write=True)
+    fill_waterfall(out_bbdata, write=True)
+
+    ras = np.array([chime_bbdata["tiedbeam_locations"]["ra"][0]])
+    decs = np.array([chime_bbdata["tiedbeam_locations"]["dec"][0]])
+    source_names = np.array(['J0117+8928'])
+    bbatas=[chime_bbdata,out_bbdata]
+
+    ss_job = corr_job_station.CorrJob(bbatas,telescopes=telescopes,ras=ras,decs=decs,source_names=source_names)
+    from pyfx.twr_utils import get_tw_frame_continuum
+    tt,ww,rr=get_tw_frame_continuum(ss_job.bbdatas[0],pad=0)
+    tt_station=[tt,tt] # ¯\_(ツ)_/¯ only matters for autos
+
+    vis = ss_job.run_correlator_job(tt_station,ww,rr,dm=0,out_h5_file = False)
+
+    cross=copy.deepcopy(vis['chime-kko']['vis'][:])
+
+    ### rfi flagging
+    cutoff_00=np.median(np.median(np.abs(cross[:,0,0,0,:,0])**2,axis=-1))+1*scipy.stats.median_abs_deviation(np.median(np.abs(cross[:,0,0,0,:,0])**2,axis=-1))
+    cutoff_11=np.median(np.median(np.abs(cross[:,0,1,1,:,0])**2,axis=-1))+1*scipy.stats.median_abs_deviation(np.median(np.abs(cross[:,0,1,1,:,0])**2,axis=-1))
+    for iifreq in range(len(cross)):
+        val_00=np.median(np.abs(cross[iifreq,0,0,0,:,0])**2,axis=-1)
+        val_11=np.median(np.abs(cross[iifreq,0,1,1,:,0])**2,axis=-1)
+        if val_00 > cutoff_00:
+            cross[iifreq,0,0,0,:,0] *=0
+        if val_11 > cutoff_11:
+            cross[iifreq,0,1,1,:,0] *=0        
+
+    peaklags= extract_frame_delay(
+            cross[:,0,:,:,:,0])  
+    peaklag_00=peaklags[0]
+    peaklag_11=peaklags[1]
+
+    assert peaklag_00 == 0, "frame lag nonzero!"
+    assert peaklag_11 == 0, "frame lag nonzero!"
+
+    delays, snrs = extract_subframe_delay(cross[:,0,:,:,:,0])
+    print('test_continuum_calibrator() snr:',snrs)
+    print('test_continuum_calibrator() delays:',delays)
+
+    assert np.isclose(delays[0,0],-0.2525,rtol=1e-05), "delays[0,0] wrong!" #should be good to sub nanosecond
+    assert np.isclose(delays[1,1],-0.25109375,rtol=1e-05), "delays[1,1] wrong!" #should be good to sub nanosecond
+    assert snrs[0,0]>=70, f"fringe signal to noise is below expected value in 0,0 pol, expected (70,54), got ({snrs[0,0]},{snrs[1,1]})"
+    assert snrs[1,1]>=54, f"fringe signal to noise is below expected value in 1,1 pol,expected (70,54), got ({snrs[0,0]},{snrs[1,1]})"
+

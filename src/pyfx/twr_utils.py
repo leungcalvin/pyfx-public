@@ -7,7 +7,7 @@ N_channels=1024
 def get_tw_frame_continuum(
     telA_bbdata,
     equal_duration = True, 
-    pad = 2000):
+    pad = 100):
     """Return start frame and number of window frames ("t" and "w") by looking at the nan pattern in telA_bbdata, making use of ~all the data we have.
     
     This is an appropriate way to get the t,w,r data for a single phase-center pointing on a continuum source.
