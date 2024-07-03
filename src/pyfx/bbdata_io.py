@@ -2,48 +2,11 @@
 
 import h5py
 import numpy as np
-
 from typing import List
 from baseband_analysis.core.sampling import fill_waterfall
-
-def get_bbdatas_from_index(
-    tel_beamformed_dirs:List[str],
-    tel_a_n:int,
-    fill_freqs:bool=False,
-):
-    ## assuming 0th index is telescope A, although this doesn't really matter much
-    tel_bbdatas=[]
-    bbdata_a=extract_singlebeam(tel_beamformed_dir=tel_a_beamformed_dir,n=tel_a_n)
-    
-    ra=bbdata_a['tiedbeam_locations']['ra'][0]
-    dec=bbdata_a['tiedbeam_locations']['dec'][0]
-    
-    tel_bbdatas=get_bbdatas_from_pointing(tel_beamformed_dirs=tel_beamformed_dirs[1:],ra=ra,dec=dec,fill_freqs=fill_freqs)
-    if fill_freqs:
-        fill_waterfall(bbdata_a,write=True)
-    tel_bbdatas.insert(0,bbdata_a) #insert bbdata_a to 0th index
-    return tel_bbdatas
-
-
-def get_bbdatas_from_pointing(
-    tel_beamformed_dirs:List[str],
-    ra:float,
-    dec:float,
-    fill_freqs:bool,
-):
-    ## assuming 0th index is telescope A, although this doesn't really matter much
-    tel_bbdatas=[]
-    for tel_beamformed_dir in tel_beamformed_dirs:
-        tel_b_file=glob(tel_beamformed_dir)[0]
-        pointings_b=get_multibeam_pointing(tel_b_file)
-        tel_b_n=get_pointing_index(ra=ra,dec=dec,pointings_tel=pointings_b)
-        assert len(tel_b_n)>0, f"no tiedbeam pointing matching telescope a beamformed data from data in {tel_beamformed_dir}"
-        bbdata_b=extract_singlebeam(tel_beamformed_dir=tel_b_beamformed_dir,n=tel_b_n[0])
-        if fill_freqs:
-            fill_waterfall(bbdata_b,write=True)
-        tel_bbdatas.append(bbdata_b)
-    return tel_bbdatas
-
+from baseband_analysis.core import BBData
+from baseband_analysis.core.bbdata import concatenate as concat_bbdatas
+from glob import glob
 
 def station_from_bbdata(bbdata,
     method='index_map'
@@ -110,6 +73,49 @@ def get_ntime(bbdata_filename):
     return 
 
 
+### multibeam singlebeam crap 
+
+def get_bbdatas_from_index(
+    tel_beamformed_dirs:List[str],
+    tel_a_n:int,
+    ref_index:int=0, #index of telescope bbdata dictating pointing
+    fill_freqs:bool=False,
+):
+    ## assuming 0th index is telescope A, although this doesn't really matter much
+    tel_bbdatas=[]
+
+    bbdata_a=extract_singlebeam(tel_beamformed_dir=tel_beamformed_dirs[ref_index],n=tel_a_n)
+    
+    ra=bbdata_a['tiedbeam_locations']['ra'][0]
+    dec=bbdata_a['tiedbeam_locations']['dec'][0]
+    tel_beamformed_dirs.pop(ref_index)
+    tel_bbdatas=get_bbdatas_from_pointing(tel_beamformed_dirs=tel_beamformed_dirs,ra=ra,dec=dec,fill_freqs=fill_freqs)
+    if fill_freqs:
+        fill_waterfall(bbdata_a,write=True)
+    tel_bbdatas.insert(0,bbdata_a) #insert bbdata_a to 0th index
+    return tel_bbdatas
+
+
+def get_bbdatas_from_pointing(
+    tel_beamformed_dirs:List[str],
+    ra:float,
+    dec:float,
+    fill_freqs:bool,
+):
+    ## assuming 0th index is telescope A, although this doesn't really matter much
+    tel_bbdatas=[]
+    for tel_beamformed_dir in tel_beamformed_dirs:
+        tel_b_file=glob(tel_beamformed_dir)[0]
+        pointings_b=get_multibeam_pointing(tel_b_file)
+        tel_b_n=get_pointing_index(ra=ra,dec=dec,pointings_tel=pointings_b)
+        assert len(tel_b_n)>0, f"no tiedbeam pointing matching telescope a beamformed data from data in {tel_beamformed_dir}"
+        bbdata_b=extract_singlebeam(tel_beamformed_dir=tel_beamformed_dir,n=tel_b_n[0])
+        if fill_freqs:
+            fill_waterfall(bbdata_b,write=True)
+        tel_bbdatas.append(bbdata_b)
+    return tel_bbdatas
+
+
 def get_pointing_index(
     ra:float,
     dec:float,
@@ -125,3 +131,45 @@ def get_pointing_index(
     indices=np.where((ra_matches)&(dec_matches))[0]
     return indices
 
+
+def extract_singlebeam(
+    tel_beamformed_dir: str, 
+    n: int
+) -> BBData:
+    """
+    Extracts the nth source in the multibeam data and consolidates it into a singlebeam bbdata object.
+    
+    Inputs: 
+    ----------
+    tel_beamformed_dir: str
+        directory where multibeam data is stored
+    n: int
+        integer denoting the nth source in the beamformed data that will be extracted and consolidated
+
+    Returns: 
+    ----------
+    BBData object containing singlebeam data for the specified nth source
+    """
+
+    if tel_beamformed_dir[-1] == "*":
+        tel_beamformed_dir += ".h5"
+    elif tel_beamformed_dir[-1] == "/":
+        tel_beamformed_dir += "*.h5"
+    elif tel_beamformed_dir[-1] != "5":
+        tel_beamformed_dir += "/*.h5"
+
+    tel_files = glob(tel_beamformed_dir)
+    datas = []
+    assert len(tel_files) > 0, f"no files found in glob({tel_beamformed_dir})"
+    for file in tel_files:
+        try:
+            datas.append(BBData.from_file(file, beam_sel=slice(2 * n, 2 * n + 2, 1)))
+        except:
+            logging.info(f'could not read in {file}')
+    tel_bbdata = concat_bbdatas(datas)
+    tel_bbdata_freqs = tel_bbdata.index_map["freq"]["centre"]
+
+    assert len(np.unique(tel_bbdata_freqs)) == len(
+        tel_bbdata_freqs
+    ), f"a redundent number of frequencies exist in {tel_beamformed_dir}. Please remove redundant frequency files before proceeding"
+    return tel_bbdata
