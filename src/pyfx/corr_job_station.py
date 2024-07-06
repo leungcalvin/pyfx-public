@@ -705,6 +705,8 @@ class CorrJob:
 
     def tij_other_stations(self, gate_spec, pointing_spec):
         """Do this on a per-pointing and per-station basis.
+
+        For each gate and each pointing, figure out when the other stations start integrating in unix time.
         
         Parameters
         ----------
@@ -726,15 +728,20 @@ class CorrJob:
         # Double check pointings are OK
         assert np.isclose(self.pycalc_results.src_ra.deg,pointing_spec['corr_ra']).all(), "pycalc does not match inputted pointing_spec"
         assert np.isclose(self.pycalc_results.src_dec.deg,pointing_spec['corr_dec']).all(), "pycalc does not match inputted pointing_spec"
-        for ii in range(len(pointing_spec)):
-            delays= self.pycalc_results.interpolate_delays(
-                Time(tij_unix[:,ii,:].flatten(),format = 'unix'))[:,0,:,:] 
-                #delays.shape = (n_freq * n_time,n_station, n_pointing) 
-            delays -= delays[:, iiref, None,:] # subtract delay at the reference station -- now we have instantaneous baseline delays of shape (n_freq * n_time, n_station, n_pointing)
-        for iitel, telescope in enumerate(self.telescopes):
-            for jjpointing, pointing in enumerate(self.pointings):
-                tau_ij = delays[:, iitel, jjpointing].reshape(tij[:,jjpointing,:].shape)/2.56 #frames
-                tij_sp[iitel,:,jjpointing,:] = tij[:,jjpointing,:] + tau_ij
+        # Now we want to calculate delays for each pointing & each station & each gate.
+
+        delays_per_station_per_pointing = np.zeros(n_freq * n_time)
+        for jjpointing in range(len(pointing_spec)):
+            delays_all_stations = self.pycalc_results.interpolate_delays(
+                    Time(tij_unix[:,jjpointing,:].flatten(),format = 'unix'))[:,0,:,jjpointing] 
+            # delays_all_stations.shape = (n_freq * n_time,n_station) 
+            ref_delays_all_stations = delays_all_stations - delays_all_stations[:, iiref,None] 
+            # subtract delay at the reference station...
+            # ...giving us instantaneous baseline delays of shape (n_freq * n_time, n_station)
+            for iitel, telescope in enumerate(self.telescopes):
+                tau_ij = delays_all_stations[:, iitel].reshape((n_freq,n_time))
+                tij_sp[iitel,:,jjpointing,:] = tij_unix[:,jjpointing,:] + tau_ij
+                # tij_
         self.tij_sp = tij_sp
         return tij_sp
     
@@ -773,10 +780,10 @@ class CorrJob:
             
         t_ij_station_pointing = self.tij_other_stations(gate_spec=gate_spec,pointing_spec=pointing_spec)
 
-        gate_start_frame = gate['gate_start_frame'] 
-        w_ij = gate['window'] 
-        r_ij = gate['r'] 
-        dm = gate['dm'] 
+        gate_start_frame = gate_spec['gate_start_frame'] 
+        w_ij = gate_spec['duration_frames'] 
+        r_ij = gate_spec['dur_ratio'] 
+        dm = pointing_spec['dm_correlator'] 
         ref_index=self.tel_names.index(self.ref_station)
         ref_index=self.ref_index
         bbdata_ref = self.bbdatas[self.ref_index]
