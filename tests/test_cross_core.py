@@ -56,7 +56,7 @@ class VeryBasicBBData:
         
 
 
-def dont_test_autocorr_sim(): # deprecated test 
+def dont_test_autocorr_sim(): # deprecated test, renamed from test_autocorr_sim
     """Tests whether output of autocorr makes sense given "simulated" input data.
     Autocorrs should the same in both pols if the input is the same.
     Autocorrs should be the same with zp = False and zp = True (an optimization done around June 2023)
@@ -298,6 +298,7 @@ def test_pulsar_pycalc_corrjob():
     Same as test_pulsar_pycalc() but using pycalc instead of difxcalc-wrapper in CorrJob
     Run this on CANFAR in a container containing pycalc, pyfx, and baseband-analysis.
     """
+    from coda.core import VLBIVis
     telescopes = [chime,kko]
     chime_file='/arc/projects/chime_frb/pyfx_test_files/304050301_target_B0355+54_chime.h5'
     kko_file='/arc/projects/chime_frb/pyfx_test_files/304050301_target_B0355+54_kko.h5'
@@ -308,10 +309,15 @@ def test_pulsar_pycalc_corrjob():
     ra=np.atleast_1d(chime_bbdata['tiedbeam_locations']['ra'][0])
     dec=np.atleast_1d(chime_bbdata['tiedbeam_locations']['dec'][0])
     print('ra,dec:',ra,dec)
-    pulsar_job = corr_job_station.CorrJob([chime_bbdata,out_bbdata],telescopes=telescopes,
-       ras = ra,
-       decs = dec,
-       source_names=np.atleast_1d('B0355+54')
+    pointing_spec = np.empty((1,),dtype = VLBIVis._dataset_dtypes['pointing'])
+    pointing_spec['corr_ra'][:] = ra
+    pointing_spec['corr_dec'][:] = dec
+    pointing_spec['source_name'][:] = 'B0329+54_pytest'
+    pointing_spec['dm_correlator'][:] = 57.1
+    pulsar_job = corr_job_station.CorrJob(
+        bbdatas = [chime_bbdata,out_bbdata],
+        telescopes = telescopes,
+        pointing_spec = pointing_spec,
 	   )
     toa = Time(
         out_bbdata["time0"]["ctime"][0],
@@ -320,17 +326,16 @@ def test_pulsar_pycalc_corrjob():
         precision=9,
     ) +25310*2.56e-6*un.s
 
-    t,w,r = pulsar_job.define_scan_params(
+    gate_spec = pulsar_job.define_scan_params_transient(
 			      start_or_toa = 'start',
 			      t0f0 = (toa, 800.0),#(1689783027.6518016, 800.0),
 			      freq_offset_mode = 'dm',
-			      Window = np.ones(1024) * 761,
+			      window = np.ones(1024,dtype=int) * 761,
 			      r_ij = np.ones(1024) * 1,
-			      dm = 57.1,
-                  max_lag=100,
+                  
 			      )
-    logging.info(t)
-    vlbivis = pulsar_job.run_correlator_job(t[...,0:1],w[0,:,0:1].astype(int),r[...,0:1],dm = 57.1,
+    vlbivis = pulsar_job.run_correlator_job(
+        gate_spec, pointing_spec, max_lag=100,
 			      out_h5_file = False)
     cross = vlbivis['chime-kko']['vis'][:]
     assert cross.shape == (1024,1,2,2,201,1)
