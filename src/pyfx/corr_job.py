@@ -409,14 +409,16 @@ class CorrJob:
         (_t0, _f0) = t0f0
         if _f0 == "top":  # use top of the collected band as reference freq
             iifreq = 0
-        if _f0 == "bottom":  # use bottom of the collected band as reference freq
+        elif _f0 == "bottom":  # use bottom of the collected band as reference freq
             iifreq = -1
-        if type(_f0) is float:  # use the number as the reference freq
+        elif isinstance(_f0, float): #numpy64 will fail on this -> type(_f0) is float:  # use the number as the reference freq
             iifreq = np.argmin(np.abs(im_freq["centre"][:] - _f0))
             offset_mhz = im_freq["centre"][iifreq] - _f0
             logging.info(
                 "INFO: Offset between requested frequency and closest frequency: {offset_mhz} MHz"
             )
+        else:
+            raise AssertionError("Please pass in t0f0: (astropy.Time,float) or t0f0: (astropy.Time,str) where f0='top' or 'bottom")
         f0 = im_freq["centre"][iifreq]  # the actual reference frequency in MHz.
 
         if _t0 == "start":
@@ -883,7 +885,6 @@ class CorrJob:
         r,
         iiref=0,
         pointing=0,
-        dm=None,
         fscrunch=4,
         tscrunch=None,
         vmin=0,
@@ -901,7 +902,7 @@ class CorrJob:
         del wwfall
 
         y = np.arange(1024)
-        for iiscan in range(t.shape[-1]):
+        for iiscan in range(gate_start_frame.shape[-1]):
             f = plt.figure()
             waterfall = sww[:, pointing] + sww[:, pointing + 1]
             waterfall -= np.nanmedian(waterfall)
@@ -946,7 +947,7 @@ class CorrJob:
                 x_rplus, y / fscrunch, linestyle="-.", color="red", lw=1
             )  # shade t + w/2 + r/2
             plt.legend(loc="lower right")
-            if t_a_type == "unix":
+            '''if t_a_type == "unix":
                 xmin = np.nanmin(
                     (
                         gate_start_frame[:, pointing, :]
@@ -961,16 +962,16 @@ class CorrJob:
                     ).sec,
                     axis=-1,
                 ) / (2.56e-6 * tscrunch)
-            else:
-                xmin = np.nanmin(gate_start_frame[:, pointing, :], axis=-1) / (tscrunch)
-                xmax = np.nanmax(gate_start_frame[:, pointing, :], axis=-1) / (tscrunch)
+            else:'''
+            xmin = np.nanmin(gate_start_frame[:, pointing, :], axis=-1) / (tscrunch)
+            xmax = np.nanmax(gate_start_frame[:, pointing, :], axis=-1) / (tscrunch)
             if xpad is not None:
                 plt.xlim(np.nanmedian(xmin) - xpad, np.nanmedian(xmax) + xpad)
             plt.ylim(1024 / fscrunch, 0)
             plt.ylabel(f"Freq ID (0-1023) / {fscrunch:0.0f}")
             plt.xlabel(f"Time ({tscrunch:0.1f} frames)")
             if out_file is not None:
-                fig.savefig(out_file, bbox_inches="tight")
+                plt.savefig(out_file, bbox_inches="tight")
         del bbdata_A
         return f
 
