@@ -8,7 +8,7 @@ from astropy.time import Time, TimeDelta
 from baseband_analysis.core import BBData
 from baseband_analysis.core.sampling import fill_waterfall
 from pycalc11 import Calc
-from pyfx import corr_job_station as corr_job
+from pyfx import corr_job
 from pyfx.core_vis import extract_frame_delay, extract_subframe_delay
 
 chime_file = "/arc/projects/chime_frb/pyfx_test_files/astro_256150292_multibeam_LOFAR_L725386_24.2440833_47.8580556_chime.h5"
@@ -30,17 +30,17 @@ kko = ac.EarthLocation.from_geocentric(
 kko.info.name = "kko"
 
 
-def test_corr_job_runs_filled():
+def test_corr_job_runs_filled_multiple_phase_centers():
     chime_bbdata = BBData.from_file(chime_file)
     out_bbdata = BBData.from_file(kko_file)
-    ra = np.atleast_1d(chime_bbdata["tiedbeam_locations"]["ra"][0])
-    dec = np.atleast_1d(chime_bbdata["tiedbeam_locations"]["dec"][0])
+    ra = np.atleast_1d(chime_bbdata["tiedbeam_locations"]["ra"][0]) + np.zeros(10)
+    dec = np.atleast_1d(chime_bbdata["tiedbeam_locations"]["dec"][0]) + np.zeros(10)
     telescopes = [chime, kko]
     fill_waterfall(chime_bbdata, write=True)
     fill_waterfall(out_bbdata, write=True)
     from coda.core import VLBIVis
 
-    pointing_spec = np.empty((1,), dtype=VLBIVis._dataset_dtypes["pointing"])
+    pointing_spec = np.empty((10,), dtype=VLBIVis._dataset_dtypes["pointing"])
     pointing_spec["corr_ra"][:] = ra
     pointing_spec["corr_dec"][:] = dec
     pointing_spec["source_name"][:] = "NCP_pytest"
@@ -64,7 +64,7 @@ def test_corr_job_runs_filled():
         num_scans_before=10,
         num_scans_after=8,
     )
-    nstation, nfreq, npointing, ntime = (2, 1024, 1, 10 + 8 + 1)
+    nstation, nfreq, npointing, ntime = (2, 1024, 10, 10 + 8 + 1)
     assert gate_spec.shape == (nfreq, npointing, ntime)
     assert (
         np.abs(
@@ -73,6 +73,12 @@ def test_corr_job_runs_filled():
         < FLOAT64_PRECISION
     ).all(), (
         "Expected start times to start at the BBData edge for the reference station"
+    )
+    vis = ncp_job.run_correlator_job(
+        event_id=256150292,
+        gate_spec=gate_spec,
+        pointing_spec=pointing_spec,
+        out_h5_file=False,
     )
 
 

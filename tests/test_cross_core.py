@@ -11,7 +11,7 @@ from baseband_analysis.core.bbdata import BBData
 from baseband_analysis.core.dedispersion import coherent_dedisp
 from baseband_analysis.core.sampling import fill_waterfall
 from pycalc11 import Calc
-from pyfx import corr_job_station as corr_job_station
+from pyfx import corr_job
 from pyfx.core_correlation import autocorr_core, crosscorr_core
 from pyfx.core_correlation_station import autocorr_core, cross_correlate_baselines
 from pyfx.core_vis import extract_frame_delay, extract_subframe_delay
@@ -395,7 +395,7 @@ def test_pulsar_pycalc_corrjob():
     pointing_spec["corr_dec"][:] = dec
     pointing_spec["source_name"][:] = "B0355+54_pytest"
     pointing_spec["dm_correlator"][:] = 57.1
-    pulsar_job = corr_job_station.CorrJob(
+    pulsar_job = corr_job.CorrJob(
         bbdatas=[chime_bbdata, out_bbdata],
         telescopes=telescopes,
         pointing_spec=pointing_spec,
