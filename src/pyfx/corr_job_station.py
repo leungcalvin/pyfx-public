@@ -190,6 +190,40 @@ def ctimeo2atime(ctime,ctime_offset):
     """Convert ctime & ctime_offset into astropy.Time"""
     return Time(val = ctime, val2 = ctime_offset,format = 'unix')
 
+def fpga_start_time(
+    time0, start_time_error=True, integer_error=False, astropy_time=True
+):
+    """Returns the FPGA start time, inferred from every channel of baseband data present, as a list of Decimal objects"""
+    dump_time = Time(
+        time0["ctime"][:],
+        val2=time0["ctime_offset"][:],
+        format="unix",
+        precision=9,
+    )
+    fpga_start = dump_time - TimeDelta(2.56e-6 * un.s * time0["fpga_count"][:])
+    fpga_start_unix = fpga_start.to_value("unix", subfmt="decimal")
+    if (
+        np.mod(np.median(fpga_start_unix), 1) >= 1e-9
+    ):  # CHIME FPGAs start on an integer number of seconds , but not all F engines do
+        if integer_error:
+            ValueError("FPGAs do not start on an integer second")
+        else:
+            UserWarning("FPGAs do not start on an integer second")
+
+    if (
+        np.max(fpga_start_unix) - np.min(fpga_start_unix) > 1e-9
+    ):  # should be within one FPGA cycle
+        if start_time_error:
+            ValueError("Frequency channel timestamps differ by more than 1 nanosecond!")
+        else:
+            UserWarning(
+                "Frequency channel timestamps differ by more than 1 nanosecond!"
+            )
+    if astropy_time:
+        return fpga_start
+    else:
+        return fpga_start_unix
+    
 class CorrJob:
     def __init__(
         self, 
@@ -218,7 +252,7 @@ class CorrJob:
                     this_bbdata,
                     )
             if tel_name != self.tel_names[i]:
-                print(f"warning: telescope name { self.tel_names[i]} from input telescopes does not correspond to telescope name {tel_name} from bbdata. Please check that your input parameters are identically ordered.")
+                print(f"warning: telescope name {self.tel_names[i]} from input telescopes does not match telescope name {tel_name} from bbdata. Please check that your input parameters are identically ordered.")
         self.telescopes = telescopes 
         self.ref_station=ref_station
         ref_index=self.tel_names.index(ref_station)
@@ -236,8 +270,8 @@ class CorrJob:
             latest_end_unix = max(latest_end_unix, 
                 this_bbdata['time0']['ctime'][-1] + this_bbdata.ntime)
             if i==ref_index:
-                self.ref_ctimes=this_bbdata['time0']['ctime']
-                self.ref_ctime_offsets=this_bbdata['time0']['ctime_offset']
+                self.ref_ctime=this_bbdata['time0']['ctime']
+                self.ref_ctime_offset=this_bbdata['time0']['ctime_offset']
             if this_bbdata.nfreq<1024:
                 fill_waterfall(this_bbdata, write=True)
 
@@ -310,7 +344,7 @@ class CorrJob:
         f0 = im_freq['centre'][iifreq] # the actual reference frequency in MHz.
 
         if _t0 == 'start':
-            t0 = Time(time0['ctime'][iifreq],val2 = time0['ctime_offset'][iifreq]) # the actual reference start time
+            t0 = Time(time0['ctime'][iifreq],val2 = time0['ctime_offset'][iifreq],format='unix') # the actual reference start time
         if _t0 == 'middle':
             t0 = Time(time0['ctime'][iifreq] + ntime * 2.56e-6 // 2,
                     val2 = time0['ctime_offset'][iifreq])
@@ -329,13 +363,18 @@ class CorrJob:
         To take into account that the different boundaries of the data, we trim the edges of the scan.
         We remove :pad: frames from both the left and right of the integration.gate_start_frame & ww.
 
-        Inputs
-        ------
+        Parameters
+        ----------
         self : CorrJob
             Should have self.bbdatas and self.ref_index attributes.
         
         equal_duration : bool
             If equal_duration is set to True, we will make sure the integration time is the same across all frequencies.
+
+        Returns
+        -------
+        gate_spec : np.array of shape (1024,n_pointings,1)
+            Note that there is only one scan because we're integrating over the whole dump.
         """
         bbdata_ref = self.bbdatas[self.ref_index]
         pol=0
@@ -359,8 +398,8 @@ class CorrJob:
         gate_spec = np.empty(tt.shape,dtype = VLBIVis._dataset_dtypes['time'])
         gate_spec['gate_start_unix'], gate_spec['gate_start_unix_offset'] = atime2ctimeo(self.frame2atime(tt))
         gate_spec['gate_start_frame'] = tt
-        gate_spec['window'] = ww
-        gate_spec['r_ij'] = 1.0
+        gate_spec['duration_frames'] = ww
+        gate_spec['dur_ratio'] = 1.0
         return gate_spec
         
     def define_scan_params_transient(
@@ -369,12 +408,13 @@ class CorrJob:
         start_or_toa = 'start',
         freq_offset_mode = 'bbdata',
         time_spacing = 'even',
-        window = np.ones(1024,dtype = int) * 1000,
+        window = 1000,
         r_ij = np.ones(1024),
         num_scans_before = 10,
         num_scans_after = 8,
         time_ordered = False,
         period_frames = 1000,
+
     ):
         """
         Tells the correlator when to start integrating, how long to start integrating, for each station. Run this after the CorrJob() is instantiated.
@@ -394,15 +434,16 @@ class CorrJob:
         
         width : 'fixed', 'from_time'
         
-        Window : np.ndarray of int
-            Sets the integration duration in frames as a function of frequency.
+        Window : np.ndarray, of shape (npointing,)
+            Sets the integration duration in frames as a function of pointing.
 
+        period_frames : np.ndarray, of shape (npointing,)
+            Sets the spacing between integrations as a function of pointing.
         kwargs : 'dm' and 'f0', 'pdot','wi'
         """
+        period_frames = np.atleast_1d(period_frames)
         dm = self.pointings['dm_correlator'] 
         bbdata_ref = self.bbdatas[self.ref_index]
-        window = np.atleast_1d(window)
-        assert np.issubdtype(window.dtype, np.integer),'Window must be an integer number of frames!'
 
         # First: if t0f0 is a bunch of strings, then get t0 & f0 from the BBData. 
         # t00 will be output as an astropy.Time
@@ -411,59 +452,69 @@ class CorrJob:
         
         # First do t_i0 for the reference station, i.e. generate start times for other frequencies.
         if freq_offset_mode == 'bbdata':
-            _ti0 = _ti0_from_t00_bbdata(bbdata_ref,t_00 = t00, f0 = f0,return_ctimeo = False)
-        if freq_offset_mode == "dm":
+            t_i0 = self._ti0_from_t00_bbdata(bbdata_ref,t_00 = t00, f0 = f0,return_ctimeo = False)
+        elif freq_offset_mode == "dm":
             assert type(t0f0[0]) is not str and type(t0f0[1]) is not str, "You probably want to pass in a hard-coded time & frequency reference as t0f0 if you want to follow a DM sweep."
             t_i0 = self._ti0_from_t00_dm(t00, f0, dm = dm, fi = FREQ,return_ctimeo=False) # frame indices
         # If _ti0 is a TOA, need to shift _ti0 back by half a scan length 
-        
-        window = right_broadcasting(window,target_shape = t_i0.shape)
-        if start_or_toa == 'toa':
-            t_i0 -= window # Scan duration given by :Window:, not :period_frames:!
-            logging.info('INFO: Using TOA mode: shifting all scans to be centered on t_ij')
+        else:
+            raise ValueError('freq_offset_mode must be either "bbdata" or "dm"')
 
+        # Add pointing axis
+        t_i0 = t_i0[:,None] + np.zeros_like(dm,dtype=int)[None,:] # (n_freq, n_pointing)
+        
+        _tij = t_i0 # by default, only do one scan
         # Next do t_ij for the reference station from t_i0.
-        if np.abs(num_scans_after + num_scans_before) >= 1:
+
+        if num_scans_before or num_scans_after:
             period_frames = np.atleast_1d(period_frames)
             if period_frames.size == 1:
                 period_frames.shape = (len(self.pointings),)
 
-        # Allow evenly spaced gates...
-        if time_spacing == "even":
-            _tij = self._ti0_even_spacing(t_i0,period_frames,
-            num_scans_before = num_scans_before, 
-            num_scans_after = num_scans_after, 
-            time_ordered = time_ordered, return_ctimeo = False)
-        if time_spacing == "overlap2":
-            _tij1 = self._ti0_even_spacing(t_i0,period_frames,
-                                num_scans_before = num_scans_before, 
-                                num_scans_after = num_scans_after, 
-                                time_ordered = time_ordered, return_ctimeo = False)
-            _tij2 = self._ti0_even_spacing(t_i0 + 0.5 * period_frames,period_frames,
-                                num_scans_before = num_scans_before, 
-                                num_scans_after = num_scans_after, 
-                                time_ordered = time_ordered, return_ctimeo = False)
-            _tij = np.concatenate((_tij1,_tij2),axis = -1) # concatenate along time axis
-        if time_spacing == 'overlap3':
-            _tij1 = _ti0_even_spacing(bbdata_ref,
-                                t_i0,period_frames,
-                                num_scans_before = num_scans_before, 
-                                num_scans_after = num_scans_after, 
-                                time_ordered = time_ordered,
-                                return_ctimeo = False)
-            _tij2 = _ti0_even_spacing(bbdata_ref,
-                                t_i0 + 0.333 * period_frames,period_frames,
-                                num_scans_before = num_scans_before, 
-                                num_scans_after = num_scans_after, 
-                                time_ordered = time_ordered,
-                                return_ctimeo = False)
-            _tij3 = _ti0_even_spacing(bbdata_ref,
-                                t_i0 + 0.666 * period_frames,period_frames,
-                                num_scans_before = num_scans_before, 
-                                num_scans_after = num_scans_after, 
-                                time_ordered = time_ordered,
-                                return_ctimeo = False)
-            _tij = np.concatenate((_tij1,_tij2,_tij3),axis = -1) # concatenate along time axis
+            if time_spacing == "even":
+                _tij = self._ti0_even_spacing(t_i0,period_frames,
+                num_scans_before = num_scans_before, 
+                num_scans_after = num_scans_after, 
+                time_ordered = time_ordered, return_ctimeo = False)
+            if time_spacing == "overlap2":
+                _tij1 = self._ti0_even_spacing(t_i0,period_frames,
+                                    num_scans_before = num_scans_before, 
+                                    num_scans_after = num_scans_after, 
+                                    time_ordered = time_ordered, return_ctimeo = False)
+                _tij2 = self._ti0_even_spacing(t_i0 + 0.5 * period_frames,period_frames,
+                                    num_scans_before = num_scans_before, 
+                                    num_scans_after = num_scans_after, 
+                                    time_ordered = time_ordered, return_ctimeo = False)
+                _tij = np.concatenate((_tij1,_tij2),axis = -1) # concatenate along time axis
+            if time_spacing == 'overlap3':
+                _tij1 = _ti0_even_spacing(bbdata_ref,
+                                    t_i0,period_frames,
+                                    num_scans_before = num_scans_before, 
+                                    num_scans_after = num_scans_after, 
+                                    time_ordered = time_ordered,
+                                    return_ctimeo = False)
+                _tij2 = _ti0_even_spacing(bbdata_ref,
+                                    t_i0 + period_frames / 3,period_frames,
+                                    num_scans_before = num_scans_before, 
+                                    num_scans_after = num_scans_after, 
+                                    time_ordered = time_ordered,
+                                    return_ctimeo = False)
+                _tij3 = _ti0_even_spacing(bbdata_ref,
+                                    t_i0 + 2 * period_frames / 3,period_frames,
+                                    num_scans_before = num_scans_before, 
+                                    num_scans_after = num_scans_after, 
+                                    time_ordered = time_ordered,
+                                    return_ctimeo = False)
+                _tij = np.concatenate((_tij1,_tij2,_tij3),axis = -1) # concatenate along time axis
+
+
+        window = np.atleast_2d(window)
+        window = right_broadcasting(window,target_shape = _tij.shape)
+        assert np.issubdtype(window.dtype, np.integer),'Window must be an integer number of frames!'
+        if start_or_toa == 'toa':
+            _tij -= window # Scan duration given by :Window:, not :period_frames:!
+            logging.info('INFO: Using TOA mode: shifting all scans to be centered on t_ij')
+
 
         logging.info('Success: generated a valid set of integrations! Rounding to nearest 2.56us to create topocentric gate specification.')
         t_ij = self.frame2atime(int_frames = _tij)
@@ -478,31 +529,62 @@ class CorrJob:
 
     def atime2frame(
         self,
-        timestamps: np.ndarray):
-        """Convert astropy.Time to frame index using self.ref_bbdata"""        
-        ctime = Time(
-                    self.ref_ctimes,
-                    val2=self.ref_ctime_offsets,
+        timestamps: np.ndarray,
+        bbdata = None,
+        force = False):
+        """Convert astropy.Time to frame index.
+        For safety, if a bbdata besides self.ref_bbdata is desired,
+        you must pass force = True must be passed in. Or else we disallow it.
+        
+        timestamps : astropy.Time whose shape is (1024,...)
+        
+        bbdata : BBData
+            If passed in and force = True, will grab reference times from this BBData instead.
+        
+        force : bool
+            For safety, set to False by default.
+        """  
+        if force and bbdata is not None:
+            ctime = bbdata['time0']['ctime'][:].copy()
+            ctime_offset = bbdata['time0']['ctime_offset'][:].copy()
+        elif bbdata is not None and not force:
+            raise ValueError('Are you sure you want to calculate a frame index for a non-core station? If so, pass force = True')
+        else:
+            ctime = self.ref_ctime
+            ctime_offset = self.ref_ctime_offset
+        _ctime = Time(
+                    ctime,
+                    val2=ctime_offset,
                     format="unix",
                     precision=9,
                 )
-        _ctime = right_broadcasting(ctime, target_shape = timestamps.shape)
-        closest_frame=np.round(((timestamps - _ctime).sec/(2.56e-6*un.s)).value).astype(int)
+        _ctime_shaped = right_broadcasting(_ctime, target_shape = timestamps.shape)
+        closest_frame=np.round(((timestamps - _ctime_shaped).sec/(2.56e-6*un.s)).value).astype(int)
         return closest_frame #timestamps_rounded
 
     def frame2atime(
         self,
-        int_frames: np.ndarray):
+        int_frames: np.ndarray,
+        bbdata = None,
+        force = False):
         """Convert frame index to astropy.Time"""
-        ctime = Time(
-            right_broadcasting(self.ref_ctimes,int_frames.shape) + 2.56e-6 * int_frames,
-            val2 = right_broadcasting(self.ref_ctime_offsets,int_frames.shape),
+        if force and bbdata is not None:
+            ctime = bbdata['ctime'][:].copy()
+            ctime_offset = bbdata['ctime_offset'][:].copy()
+        elif bbdata is not None and not force:
+            raise ValueError('Are you sure you want to calculate a frame index for a non-core station? If so, pass force = True')
+        else:
+            ctime = self.ref_ctime
+            ctime_offset = self.ref_ctime_offset
+        exact_atime = Time(
+            right_broadcasting(ctime,int_frames.shape) + 2.56e-6 * int_frames,
+            val2 = right_broadcasting(ctime_offset,int_frames.shape),
             format = 'unix',
             precision = 9,
         )
-        return ctime
-    
-    def _ti0_from_t00_bbdata(bbdata, t_00,f0,return_ctimeo = False):
+        return exact_atime
+
+    def _ti0_from_t00_bbdata(self,bbdata, t_00,f0,return_ctimeo = False):
         """Returns ti0 such that it aligns with the start frame of each channel in the bbdata (potentially with a constant frame_offset > 0 for all channels).
 
         This always returns 1024 start times, since different baselines might have different amounts of frequency coverage.
@@ -519,7 +601,7 @@ class CorrJob:
             If False, returns integer frame numbers.
         Returns
         -------
-        ti0 : np.array of shape (1024,) of true times.
+        ti0 : np.array of shape (1024, n_pointing) of true times.
         """
         if type(bbdata) is str:
             im_freq = get_all_im_freq(bbdata_filename)
@@ -528,12 +610,16 @@ class CorrJob:
             im_freq = bbdata.index_map['freq']
             t0 = bbdata['time0'][:].copy()
         iifreq = np.argmin(np.abs(im_freq["centre"][:] - f0))
+
+        if t_00 == 'start':
+            t_00 = t0['ctime'][iifreq]
         sparse_ti0 = t0.copy()
-        sparse_ti0['ctime'][:] = t0['ctime'][:] + (t_00 - t0['ctime'][iifreq]) # ti0 if these were all the frequencies we cared about. easy!
+        sparse_ti0['ctime'][:] = t0['ctime'][:] + (t_00 - t0['ctime'][iifreq]) 
+        # ti0 if these were all the frequencies we cared about. easy!
 
         #...but, we always need all 1024 frequencies! need to interpolate reasonably.
         ti0 = extrapolate_to_full_band(sparse_ti0, im_freq['id'][:])
-        frames = self.atime2frame(*ctimeo2atime(ti0['ctime'],ti0['ctime_offset']))
+        frames = self.atime2frame(ctimeo2atime(ti0['ctime'],ti0['ctime_offset']))
         if return_ctimeo:
             return ti0['ctime'],ti0['ctime_offset'],frames
         else:
@@ -714,6 +800,16 @@ class CorrJob:
             Holds attributes 'corr_ra', 'corr_dec', 'source_name', 'dm_correlator'.
         
         pointing_spec : np.ndarray of type VLBIVis._dataset_dtype['pointing'] of shape (n_pointing).
+
+        Returns
+        -------
+        tij_ctime_sp : np.ndarray of float64 of shape (n_tel, n_freq, n_pointing, n_time)
+            Unix start times of the scan at each station
+        tij_ctime_offset_sp : np.ndarray of float64 of shape (n_tel, n_freq, n_pointing, n_time)
+            Unix start times of the scan at each station; guaranteed to be a small correction (< FLOAT64_PRECISION)
+        tij_frame_sp : np.ndarray of int of shape (n_tel, n_freq, n_pointing, n_time)
+            Unix start frame of the scan at each station.
+            N.b. this is kept around for metadata but useless for now.
         """
         iiref = self.tel_names.index(self.ref_station)
         tij_unix = gate_spec['gate_start_unix'] #tij_unix.shape = (n_freq, n_pointing, n_time)
@@ -722,9 +818,11 @@ class CorrJob:
         n_pointing = len(pointing_spec)
         n_time = gate_spec.shape[-1]
 
-        tij_sp = np.zeros(
+        tij_unix_sp_coarse = np.zeros(
             (n_tel,n_freq,n_pointing,n_time),
-            dtype = int) 
+            dtype = float) # coarse times
+        tij_ctime_sp = np.zeros_like(tij_unix_sp_coarse) # fine times
+        tij_ctimeo_sp= np.zeros_like(tij_unix_sp_coarse) # fine times 
         # Double check pointings are OK
         assert np.isclose(self.pycalc_results.src_ra.deg,pointing_spec['corr_ra']).all(), "pycalc does not match inputted pointing_spec"
         assert np.isclose(self.pycalc_results.src_dec.deg,pointing_spec['corr_dec']).all(), "pycalc does not match inputted pointing_spec"
@@ -734,21 +832,35 @@ class CorrJob:
         for jjpointing in range(len(pointing_spec)):
             delays_all_stations = self.pycalc_results.interpolate_delays(
                     Time(tij_unix[:,jjpointing,:].flatten(),format = 'unix'))[:,0,:,jjpointing] 
-            # delays_all_stations.shape = (n_freq * n_time,n_station) 
+            # delays_all_stations.shape = (n_freq * n_time,n_station) ; microseconds
             ref_delays_all_stations = delays_all_stations - delays_all_stations[:, iiref,None] 
             # subtract delay at the reference station...
-            # ...giving us instantaneous baseline delays of shape (n_freq * n_time, n_station)
+            # ...giving us instantaneous baseline delays of shape (n_freq * n_time, n_station) in microseconds
             for iitel, telescope in enumerate(self.telescopes):
                 tau_ij = delays_all_stations[:, iitel].reshape((n_freq,n_time))
-                tij_sp[iitel,:,jjpointing,:] = tij_unix[:,jjpointing,:] + tau_ij
-                # tij_
-        self.tij_sp = tij_sp
-        return tij_sp
+                tij_unix_sp_coarse[iitel,:,jjpointing,:] = tij_unix[:,jjpointing,:] + tau_ij * 1e-6 # convert microseconds
+        
+        tij_frame_sp = np.zeros(tij_unix_sp_coarse.shape,dtype = int)
+        # For each station, start with the coarse float64...
+        # ..then use each BBData's precise timing to get the start time aligned to each station's start time.
+        for iitel, telescope, bbdata in zip(np.arange(n_tel),self.telescopes,self.bbdatas):
+            tij_atime_this_station = Time(
+                tij_unix_sp_coarse[iitel],
+                val2 = np.zeros_like(tij_unix_sp_coarse[iitel]),
+                format = 'unix'
+            )
+            tij_frame_sp[iitel] = self.atime2frame(
+                tij_atime_this_station,
+                bbdata = bbdata, 
+                force = True) # yes, lets use a different station
+            tij_ctime_sp[iitel], tij_ctimeo_sp[iitel] = atime2ctimeo(tij_atime_this_station)
+        return tij_ctime_sp,tij_ctimeo_sp,tij_frame_sp
     
     def run_correlator_job( 
             self,
+            event_id,
             gate_spec,
-            pointing_spec = None,
+            pointing_spec,
             max_lag = 100,
             out_h5_file = None,
             auto_corr:bool=False,
@@ -756,7 +868,8 @@ class CorrJob:
         """Run auto- and cross- correlations.
 
         Loops over baselines, then frequencies, then pointings.
-        Are all read in at once and ordered using fill_waterfall. This works well on short baseband dumps. 
+        Are all read in at once and ordered using fill_waterfall. 
+        This works well on short baseband dumps. 
         Memory cost: 2 x BBData, 
         I/O cost:N*(N-1) / 2 x BBData.
 
@@ -778,52 +891,51 @@ class CorrJob:
         if pointing_spec is None:
             pointing_spec = self.pointing_spec
             
-        t_ij_station_pointing = self.tij_other_stations(gate_spec=gate_spec,pointing_spec=pointing_spec)
+        tij_ctime,tij_ctime_offset,tij_frame = self.tij_other_stations(
+            gate_spec=gate_spec,
+            pointing_spec=pointing_spec
+        )
 
-        gate_start_frame = gate_spec['gate_start_frame'] 
-        w_ij = gate_spec['duration_frames'] 
-        r_ij = gate_spec['dur_ratio'] 
-        dm = pointing_spec['dm_correlator'] 
-        ref_index=self.tel_names.index(self.ref_station)
         ref_index=self.ref_index
         bbdata_ref = self.bbdatas[self.ref_index]
-        tel_bbdatas=self.bbdatas
-
-        gate_start_frame_top=gate_start_frame[self.ref_index]
-
-
+        tij_frame_top=tij_frame[self.ref_index]
+        w_ij = gate_spec['duration_frames'][0] # (npointing, nscan)
+        r_ij = gate_spec['dur_ratio'] # (nfreq, npointing, nscan)
+        dm = pointing_spec['dm_correlator'] 
+        output = VLBIVis()
         if auto_corr:
-            for iia, bbdata_a in enumerate(tel_bbdatas):
-
-                assert np.issubdtype(gate_start_frame.dtype, np.integer), "gate_start_frame must be an integer start frame"
-
-                gate_start_frame_tel = gate_start_frame[iia] #extract start frame for station
+            for iistation in np.arange(len(self.bbdatas)):
+                this_station = self.telescopes[iia]
+                bbdata_a = self.bbdatas[iistation]
+                tij_frame_this_station = tij_frame[iistation]
+                tij_ctime_this_station = tij_ctime[iistation]
+                tij_ctimeo_this_station = tij_ctime_offset[iistation]
+                
 
                 # there are scans with missing data: check the start and end index
-                mask_a = (gate_start_frame_tel < 0) + (gate_start_frame_tel  + w_ij[None,:,:] > bbdata_a.ntime) 
-
-                gate_start_frame_tel[mask_a] = int(bbdata_a.ntime // 2)
                 # ...but we just let the correlator correlate
-                logging.info(f'Calculating autos for station {iia}')
-
-                auto_vis = autocorr_core(DM=dm, bbdata_a=bbdata_a, 
-                                        t_a = gate_start_frame_tel,
+                auto_mask = (tij_frame_this_station < 0) + \
+                    (tij_frame_this_station  + w_ij > bbdata_a.ntime) 
+                np.clip(tij_frame_this_station, 0, bbdata_a.ntime - w_ij, 
+                        out = tij_frame_this_station)
+                logging.info(f'Calculating autos for station {ii}; {np.sum(auto_mask)}/{auto_mask.size} scans out of bounds')
+                auto_vis = autocorr_core(DM=dm, 
+                                        bbdata_a=bbdata_a, 
+                                        t_a = tij_frame_this_station,
                                         window = w_ij,
                                         R = r_ij,
                                         max_lag =self.max_lag, 
                                         n_pol = 2)
 
                 # ...and replace with nans afterward.
-                auto_vis += mask_a[:,:,None,None,None,:] * np.nan # fill with nans where
-                gate_start_unix=bbdata_a['time0']['ctime'][:,np.newaxis,np.newaxis]*np.ones(gate_start_frame_tel.shape)
-                gate_start_unix_offset=bbdata_a['time0']['ctime_offset'][:,np.newaxis,np.newaxis]+gate_start_frame_tel*2.56e-6
+                auto_vis += auto_mask[:,:,None,None,None,:] * np.nan
                 output._from_ndarray_station(
                     event_id,
-                    telescope = self.telescopes[iia],
+                    telescope = this_station,
                     bbdata = bbdata_a,
                     auto = auto_vis,
-                    gate_start_frame=gate_start_frame_tel,
-                    gate_start_unix=gate_start_unix,
+                    gate_start_frame=tij_frame_this_station,
+                    gate_start_unix=tij_ctime_this_station,
                     gate_start_unix_offset=gate_start_unix_offset,
                     window=w_ij,
                     r=r_ij,
@@ -831,39 +943,43 @@ class CorrJob:
                 logging.info(f'Wrote autos for station {iia}')
         
         cross = cross_correlate_baselines(
-                bbdatas=tel_bbdatas,
+                bbdatas=self.bbdatas,
                 bbdata_top=bbdata_ref,
-                t_a=gate_start_frame_top,
+                t_a=tij_frame_top,
                 window=w_ij,
                 R=r_ij,
                 pycalc_results=self.pycalc_results,
                 DM=dm,
-                station_indices=np.array(range(len(tel_bbdatas))),
+                station_indices=np.array(range(len(self.bbdatas))),
                 max_lag=self.max_lag, 
                 n_pol=2,
                 weight=None,
                 ref_frame=ref_index,
                 fast=True
             )
-        m=0
-        for telA in range(len(tel_bbdatas)-1):
-            gate_start_frame_top = gate_start_frame[telA] #extract start frame for station
-            for telB in range(telA+1,len(tel_bbdatas)):
+        m = 0
+        for telA in range(len(self.bbdatas)-1):
+            for telB in range(telA+1,len(self.bbdatas)):
+                tij_ctime_a = tij_ctime[telA] #extract start frame for station
+                tij_ctime_b = tij_ctime[telB] #extract start frame for station
+                avg_ctime = (tij_ctime[telA] + tij_ctime[telB]) * 0.5
+                avg_ctimeo = (tij_ctime_offset[telA] + tij_ctime_offset[telB]) * 0.5
+
                 output._from_ndarray_baseline(
                     event_id = event_id,
-                    pointing_center=pointing_centers,
+                    pointing_spec=pointing_spec,
                     telescope_a=self.telescopes[telA],
                     telescope_b=self.telescopes[telB],
                     cross=cross[m], 
-                    gate_start_unix=bbdata_ref["time0"]["ctime"][:,np.newaxis,np.newaxis]*np.ones(gate_start_frame_top.shape),
-                    gate_start_unix_offset=bbdata_ref["time0"]["ctime_offset"][:,np.newaxis,np.newaxis]+gate_start_frame_top*2.56e-6,
+                    gate_start_unix=avg_ctime,
+                    gate_start_unix_offset=avg_ctimeo,
                     window=w_ij,
                     r=r_ij
                 )
                 m+=1
                 
                 logging.info(f'Wrote visibilities for baseline {telA}-{telB}')
-        del tel_bbdatas # free up space in memory
+        del self.bbdatas # free up space in memory
 
         if type(out_h5_file) is str:
             output.save(out_h5_file)

@@ -57,8 +57,8 @@ def autocorr_core(
 
     Returns
     -------
-    auto_vis - array of autocorrelations with shape (nfreq, npointing, npol, npol, 2 * nlag + 1, nscan)
-
+    auto_vis : np.array of floats of shape (nfreq, npointing, npol, npol, 2 * nlag + 1, nscan)
+        Array of autocorrelation data.
     """
     n_freq = bbdata_a.nfreq
     n_scan = np.size(t_a, axis=-1)
@@ -252,7 +252,19 @@ def cross_correlate_baselines(
     fast:bool=True,
     max_frames: int=MAX_FRAC_SAMP_LENGTH, 
     ) -> np.ndarray:
+    """Applies delay compensation to each of N stations; correlates all N(N-1)/2 pairs.
+    bbdatas : list of BBDatas
+        The list of BBDatas in station order
+    bbdata_top : BBData
+        The BBData to use as the fixed frame of reference.
+    station_indices : list of ints
+        Fed into pycalc.interpolate_delays deep inside the correlator.
+    max_lag : int
+        Final frequency resolution of visibilities is 1/(max_lag * 2.56 us).
     
+
+    """
+
     n_freqs = np.array([len(bbdata.freq) for bbdata in bbdatas])
     assert len(np.unique(n_freqs))==1,f"There appear to be {n_freqs} frequency channels in each telescope. Please pass in these bbdata objects with frequency channels aligned (i.e. nth index along the frequency axis should correspond to the *same* channel in telescope A and B)"
     n_scan = np.size(t_a, axis=-1)

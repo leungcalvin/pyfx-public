@@ -54,8 +54,6 @@ class VeryBasicBBData:
                 "ctime_offset": self.ctime_offset
             }
         
-
-
 def dont_test_autocorr_sim(): # deprecated test, renamed from test_autocorr_sim
     """Tests whether output of autocorr makes sense given "simulated" input data.
     Autocorrs should the same in both pols if the input is the same.
@@ -312,7 +310,7 @@ def test_pulsar_pycalc_corrjob():
     pointing_spec = np.empty((1,),dtype = VLBIVis._dataset_dtypes['pointing'])
     pointing_spec['corr_ra'][:] = ra
     pointing_spec['corr_dec'][:] = dec
-    pointing_spec['source_name'][:] = 'B0329+54_pytest'
+    pointing_spec['source_name'][:] = 'B0355+54_pytest'
     pointing_spec['dm_correlator'][:] = 57.1
     pulsar_job = corr_job_station.CorrJob(
         bbdatas = [chime_bbdata,out_bbdata],
@@ -330,13 +328,19 @@ def test_pulsar_pycalc_corrjob():
 			      start_or_toa = 'start',
 			      t0f0 = (toa, 800.0),#(1689783027.6518016, 800.0),
 			      freq_offset_mode = 'dm',
-			      window = np.ones(1024,dtype=int) * 761,
+			      window = [761],
+                  period_frames = np.array([1000],dtype=int),
 			      r_ij = np.ones(1024) * 1,
-                  
+                  num_scans_before = 0,
+                  num_scans_after = 0
 			      )
     vlbivis = pulsar_job.run_correlator_job(
-        gate_spec, pointing_spec, max_lag=100,
-			      out_h5_file = False)
+        event_id = 304050301,
+        gate_spec = gate_spec, 
+        pointing_spec = pointing_spec, 
+        max_lag=100,
+
+		out_h5_file = None)
     cross = vlbivis['chime-kko']['vis'][:]
     assert cross.shape == (1024,1,2,2,201,1)
     cutoff_00=np.median(np.median(np.abs(cross[:,0,0,0,:,0])**2,axis=-1))+1*scipy.stats.median_abs_deviation(np.median(np.abs(cross[:,0,0,0,:,0])**2,axis=-1))
