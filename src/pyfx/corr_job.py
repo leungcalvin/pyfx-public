@@ -944,22 +944,7 @@ class CorrJob:
                 x_rplus, y / fscrunch, linestyle="-.", color="red", lw=1
             )  # shade t + w/2 + r/2
             plt.legend(loc="lower right")
-            '''if t_a_type == "unix":
-                xmin = np.nanmin(
-                    (
-                        gate_start_frame[:, pointing, :]
-                        - bbdata_A["time0"]["ctime"][:, None]
-                    ).sec,
-                    axis=-1,
-                ) / (2.56e-6 * tscrunch)
-                xmax = np.nanmax(
-                    (
-                        gate_start_frame[:, pointing, :]
-                        - bbdata_A["time0"]["ctime"][:, None]
-                    ).sec,
-                    axis=-1,
-                ) / (2.56e-6 * tscrunch)
-            else:'''
+
             xmin = np.nanmin(gate_start_frame[:, pointing, :], axis=-1) / (tscrunch)
             xmax = np.nanmax(gate_start_frame[:, pointing, :], axis=-1) / (tscrunch)
             if xpad is not None:
