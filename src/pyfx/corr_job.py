@@ -571,10 +571,7 @@ class CorrJob:
         # Next do t_ij for the reference station from t_i0.
 
         if num_scans_before or num_scans_after:
-            period_frames = np.atleast_1d(period_frames)
-            if period_frames.size == 1:
-                period_frames.shape = (len(self.pointings),)
-
+            period_frames = np.broadcast_to(period_frames,shape = dm.shape) # broadcast to (n_pointing,)
             if time_spacing == "even":
                 _tij = self._ti0_even_spacing(
                     t_i0,
@@ -1063,7 +1060,8 @@ class CorrJob:
         pointing_spec,
         max_lag=100,
         out_h5_file=None,
-        auto_corr: bool = False,
+        auto_corr: bool = True,
+        cross_corr: bool = True
     ):
         """Run auto- and cross- correlations.
 
@@ -1104,7 +1102,7 @@ class CorrJob:
         output = VLBIVis()
         if auto_corr:
             for iistation in np.arange(len(self.bbdatas)):
-                this_station = self.telescopes[iia]
+                this_station = self.telescopes[iistation]
                 bbdata_a = self.bbdatas[iistation]
                 tij_frame_this_station = tij_frame[iistation]
                 tij_ctime_this_station = tij_ctime[iistation]
@@ -1122,7 +1120,7 @@ class CorrJob:
                     out=tij_frame_this_station,
                 )
                 logging.info(
-                    f"Calculating autos for station {ii}; {np.sum(auto_mask)}/{auto_mask.size} scans out of bounds"
+                    f"Calculating autos for station {iistation}; {np.sum(auto_mask)}/{auto_mask.size} scans out of bounds"
                 )
                 auto_vis = autocorr_core(
                     DM=dm,
@@ -1135,7 +1133,7 @@ class CorrJob:
                 )
 
                 # ...and replace with nans afterward.
-                auto_vis += auto_mask[:, :, None, None, None, :] * np.nan
+                auto_vis = auto_vis + (auto_mask[:, :, None, None, None, :] * np.nan)
                 output._from_ndarray_station(
                     event_id,
                     telescope=this_station,
@@ -1143,49 +1141,49 @@ class CorrJob:
                     auto=auto_vis,
                     gate_start_frame=tij_frame_this_station,
                     gate_start_unix=tij_ctime_this_station,
-                    gate_start_unix_offset=gate_start_unix_offset,
+                    gate_start_unix_offset=tij_ctimeo_this_station,
                     window=w_ij,
                     r=r_ij,
                 )
-                logging.info(f"Wrote autos for station {iia}")
+                logging.info(f"Wrote autos for station {iistation}")
+        if cross_corr:
+            cross = cross_correlate_baselines(
+                bbdatas=self.bbdatas,
+                bbdata_top=bbdata_ref,
+                t_a=tij_frame_top,
+                window=w_ij,
+                R=r_ij,
+                pycalc_results=self.pycalc_results,
+                DM=dm,
+                station_indices=np.array(range(len(self.bbdatas))),
+                max_lag=self.max_lag,
+                n_pol=2,
+                weight=None,
+                ref_frame=ref_index,
+                fast=True,
+            )
+            m = 0
+            for telA in range(len(self.bbdatas) - 1):
+                for telB in range(telA + 1, len(self.bbdatas)):
+                    tij_ctime_a = tij_ctime[telA]  # extract start frame for station
+                    tij_ctime_b = tij_ctime[telB]  # extract start frame for station
+                    avg_ctime = (tij_ctime[telA] + tij_ctime[telB]) * 0.5
+                    avg_ctimeo = (tij_ctime_offset[telA] + tij_ctime_offset[telB]) * 0.5
 
-        cross = cross_correlate_baselines(
-            bbdatas=self.bbdatas,
-            bbdata_top=bbdata_ref,
-            t_a=tij_frame_top,
-            window=w_ij,
-            R=r_ij,
-            pycalc_results=self.pycalc_results,
-            DM=dm,
-            station_indices=np.array(range(len(self.bbdatas))),
-            max_lag=self.max_lag,
-            n_pol=2,
-            weight=None,
-            ref_frame=ref_index,
-            fast=True,
-        )
-        m = 0
-        for telA in range(len(self.bbdatas) - 1):
-            for telB in range(telA + 1, len(self.bbdatas)):
-                tij_ctime_a = tij_ctime[telA]  # extract start frame for station
-                tij_ctime_b = tij_ctime[telB]  # extract start frame for station
-                avg_ctime = (tij_ctime[telA] + tij_ctime[telB]) * 0.5
-                avg_ctimeo = (tij_ctime_offset[telA] + tij_ctime_offset[telB]) * 0.5
+                    output._from_ndarray_baseline(
+                        event_id=event_id,
+                        pointing_spec=pointing_spec,
+                        telescope_a=self.telescopes[telA],
+                        telescope_b=self.telescopes[telB],
+                        cross=cross[m],
+                        gate_start_unix=avg_ctime,
+                        gate_start_unix_offset=avg_ctimeo,
+                        window=w_ij,
+                        r=r_ij,
+                    )
+                    m += 1
 
-                output._from_ndarray_baseline(
-                    event_id=event_id,
-                    pointing_spec=pointing_spec,
-                    telescope_a=self.telescopes[telA],
-                    telescope_b=self.telescopes[telB],
-                    cross=cross[m],
-                    gate_start_unix=avg_ctime,
-                    gate_start_unix_offset=avg_ctimeo,
-                    window=w_ij,
-                    r=r_ij,
-                )
-                m += 1
-
-                logging.info(f"Wrote visibilities for baseline {telA}-{telB}")
+                    logging.info(f"Wrote visibilities for baseline {telA}-{telB}")
         del self.bbdatas  # free up space in memory
 
         if type(out_h5_file) is str:

@@ -81,7 +81,6 @@ def test_corr_job_runs_filled_multiple_phase_centers():
         out_h5_file=False,
     )
 
-
 def test_corr_job_runs_no_fill():
     """Same as the above, but no fill_waterfall"""
     chime_bbdata = BBData.from_file(chime_file)
@@ -168,6 +167,17 @@ def test_continuum_calibrator_corrjob():
         out_h5_file=False,
     )
 
+    gg,pp = vis.get_gate_and_pointing(ref='chime')
+    assert np.isclose(pp['corr_ra'],pointing_spec['corr_ra']).all()
+    assert np.isclose(pp['corr_dec'],pointing_spec['corr_dec']).all()
+    assert (pp['source_name'] == pointing_spec['source_name']).all()
+    assert np.isclose(pp['dm_correlator'],pointing_spec['dm_correlator']).all()
+    assert np.isclose(gg['gate_start_unix'],gate_spec['gate_start_unix']).all()
+    assert np.isclose(gg['gate_start_unix_offset'],gate_spec['gate_start_unix_offset']).all()
+    assert np.isclose(gg['gate_start_frame'],gate_spec['gate_start_frame']).all()
+    assert np.isclose(gg['duration_frames'],gate_spec['duration_frames']).all()
+    assert np.isclose(gg['dur_ratio'],gate_spec['dur_ratio']).all()
+
     cross = vis["chime-kko"]["vis"][:]
 
     ### rfi flagging
@@ -212,3 +222,4 @@ def test_continuum_calibrator_corrjob():
     assert (
         snrs[1, 1] >= 54
     ), f"fringe signal to noise is below expected value in 1,1 pol,expected (70,54), got ({snrs[0,0]},{snrs[1,1]})"
+    

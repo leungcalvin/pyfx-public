@@ -95,7 +95,7 @@ def autocorr_core(
                     )
 
             ######### intrachannel de-dispersion ##################
-            scan_a_fs_cd = intrachannel_dedisp(clipped_a, DM, f0=f0)
+            scan_a_fs_cd = intrachannel_dedisp(clipped_a, DM[kkpointing], f0=f0)
             r_jjscan = R[:, kkpointing, jjscan]  # np array of size (nfreq)
             if len(np.unique(r_jjscan)) == 1:
                 r_ij = r_jjscan[0]
@@ -164,19 +164,35 @@ def get_delays(
     pycalc_results: Calc,
     ref_frame: int,
     sample_rate: float = 2.56,
+    pointing = None,
 ):
-    """
-    Get unix times from bbdata_top
+    """Get delays towards each pointing.
+    
     Parameters
     ----------
-    telescope_index - index of telescope to be fringestopped
-    ref_start_time - topocentric unix time at which geodelays should be evaluated
-    ref_start_time_offset - a second float to hold topocentric unix time to high precision
-    ref_frame - index corresponding to station where topocentric unix time is defined (usually CHIME)
-    Outputs
-    ----------
-    t0_a, t0_a_offset - np.ndarray
-        Recorded unix timestamps (ctime and ctime_offset)
+    telescope_index : int
+        index of telescope to be fringestopped
+    
+    ref_start_time : np.ndarray of float64 of shape (n_freq)
+        topocentric unix time at which geodelays should be evaluated
+    
+    ref_start_time_offset : np.ndarray of float64 of shape (n_freq)
+        a second float to hold topocentric unix time to high precision
+    
+    ref_frame : int
+        index corresponding to station where topocentric unix time is defined (usually CHIME)
+
+    pointing : int
+        index of the pointing for which we want delays.
+        N.b. currently, all pointings are calculated but only of the pointings is kept.
+        This is really inefficient, since currently this is called in a for loop over all pointings.
+        Optimize later.
+
+    Returns
+    -------
+    geodelay : np.ndarray of float64 of shape (nfreq, n_pointing, duration_frames)
+        Geometric delay in microseconds for the requested phase center(s).
+        N.b. technically
     """
     if ref_frame == telescope_index:
         return np.zeros((ref_start_time.shape[0], wij))  # save time
@@ -198,8 +214,8 @@ def get_delays(
     #    geodelays_flattened=delays_flattened[:,0,telescope_index,:]
     # else:
     geodelays_flattened = (
-        delays_flattened[:, 0, telescope_index, :]
-        - delays_flattened[:, 0, ref_frame, :]
+        delays_flattened[:, 0, telescope_index, pointing]
+        - delays_flattened[:, 0, ref_frame, pointing]
     )  # units of seconds
     geodelays = (
         geodelays_flattened.reshape(dt_vals.shape) * 1e6
@@ -258,6 +274,7 @@ def fringestop_station(
                 wij=wij,
                 pycalc_results=pycalc_results,
                 sample_rate=sample_rate,
+                pointing=kkpointing # inefficient but whatever I hope pycalc is fast enough
             )
             scan_fs = fringestop_scan(
                 bbdata,
@@ -475,8 +492,8 @@ def crosscorr_core(
 
             #######################################################
             ######### intrachannel de-dispersion ##################
-            scan_a_fs_cd = intrachannel_dedisp(scan_a_fs, DM, f0=f0)
-            scan_b_fs_cd = intrachannel_dedisp(scan_b_fs, DM, f0=f0)
+            scan_a_fs_cd = intrachannel_dedisp(scan_a_fs, DM[kkpointing], f0=f0)
+            scan_b_fs_cd = intrachannel_dedisp(scan_b_fs, DM[kkpointing], f0=f0)
 
             ## weight the data
             if type(weight) == np.ndarray:

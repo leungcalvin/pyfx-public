@@ -26,7 +26,7 @@ MAX_FRAC_SAMP_LENGTH = 32187  # maximum FFT length, chosen to keep delay rate dr
 
 
 def autocorr_core(
-    DM: float,
+    DM: np.ndarray,
     bbdata_a: BBData,
     t_a: np.ndarray,
     window: np.ndarray,
@@ -39,8 +39,9 @@ def autocorr_core(
 
     Parameters
     ----------
-    DM : float
-        The DM with which the zeroth pointing of the data is de-smeared before the final gating. for continuum sources, set dispersion measure to 0.
+    DM : np.array of float of shape (npointing,)
+        The DM with which the zeroth pointing of the data is de-smeared before the final gating. 
+        For pointings towards continuum sources, set dispersion measure to 0.
 
     bbdata_a : BBData object
         At bare minimum, needs to have "tiedbeam_baseband" data of size (nfreq, npointing*npol, ntime).
@@ -118,7 +119,7 @@ def autocorr_core(
                         )
 
             ######### intrachannel de-dispersion ##################
-            scan_a_cd = intrachannel_dedisp(clipped_a, DM, f0=f0)
+            scan_a_cd = intrachannel_dedisp(clipped_a, DM[kkpointing], f0=f0)
             r_jjscan = R[:, kkpointing, jjscan]  # np array of size (nfreq)
             if len(np.unique(r_jjscan)) == 1:
                 r_ij = r_jjscan[0]
