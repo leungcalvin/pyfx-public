@@ -77,7 +77,6 @@ def test_corr_job_runs_filled_multiple_phase_centers():
     vis = ncp_job.run_correlator_job(
         event_id=256150292,
         gate_spec=gate_spec,
-        pointing_spec=pointing_spec,
         out_h5_file=False,
     )
 
@@ -163,7 +162,6 @@ def test_continuum_calibrator_corrjob():
     vis = ss_job.run_correlator_job(
         event_id=304295669,
         gate_spec=gate_spec,
-        pointing_spec=pointing_spec,
         out_h5_file=False,
     )
 
@@ -172,8 +170,18 @@ def test_continuum_calibrator_corrjob():
     assert np.isclose(pp['corr_dec'],pointing_spec['corr_dec']).all()
     assert (pp['source_name'] == pointing_spec['source_name']).all()
     assert np.isclose(pp['dm_correlator'],pointing_spec['dm_correlator']).all()
-    assert np.isclose(gg['gate_start_unix'],gate_spec['gate_start_unix']).all()
-    assert np.isclose(gg['gate_start_unix_offset'],gate_spec['gate_start_unix_offset']).all()
+    assert np.isclose(
+        (
+            Time(gg['gate_start_unix'],val2 = gg['gate_start_unix_offset'],format='unix').flatten() - 
+            Time(gate_spec['gate_start_unix'],val2 = gate_spec['gate_start_unix_offset'],format='unix').flatten()
+        ).to_value('second'),
+            0,
+            atol = 1e-9, 
+        ).all(), "Inputted gate does not match outputted gate."
+
+    dt2 = (Time(gg['gate_start_unix'],val2 = gg['gate_start_unix_offset'],format='unix').flatten() - 
+      Time(chime_bbdata['time0']['ctime'][:],val2 =chime_bbdata['time0']['ctime_offset'][:],format='unix').flatten()).to_value('second')
+    assert (np.abs(dt2) < 1e-9).all(), ".h5 does not match chime BBData?"
     assert np.isclose(gg['gate_start_frame'],gate_spec['gate_start_frame']).all()
     assert np.isclose(gg['duration_frames'],gate_spec['duration_frames']).all()
     assert np.isclose(gg['dur_ratio'],gate_spec['dur_ratio']).all()

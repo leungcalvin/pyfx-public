@@ -318,6 +318,8 @@ class CorrJob:
         """
         self.tel_names = [telescopes[i].info.name for i in range(len(telescopes))]
         self.bbdatas = bbdatas
+        self.pointing_spec = pointing_spec
+
         # get tel names
         for i, this_bbdata in enumerate(bbdatas):
             tel_name = station_from_bbdata(
@@ -353,10 +355,9 @@ class CorrJob:
 
         earliest_start_unix = int(earliest_start_unix - 1)  # buffer
         duration_min = 3  # max(int(np.ceil(int(latest_end_unix - earliest_start_unix + 1.0 )/60)),1)
-        self.pointings = pointing_spec
         self.pointings_sc = ac.SkyCoord(
-            ra=pointing_spec["corr_ra"].flatten() * un.deg,
-            dec=pointing_spec["corr_dec"].flatten() * un.deg,
+            ra=self.pointing_spec["corr_ra"].flatten() * un.deg,
+            dec=self.pointing_spec["corr_dec"].flatten() * un.deg,
             frame="icrs",
         )
         duration_min = 1
@@ -487,8 +488,8 @@ class CorrJob:
         ), "twr params result in negative integration duration when zero-padded. Please optimize manually, e.g. decrease pad value or input twr manually."
         tt, ww, rr = tw2twr_frames(gate_start_frame + pad, window - 2 * pad)
         ww = np.atleast_2d(ww)
-        tt.shape = (1024, len(self.pointings), 1)
-        rr.shape = (1024, len(self.pointings), 1)
+        tt.shape = (1024, len(self.pointing_spec), 1)
+        rr.shape = (1024, len(self.pointing_spec), 1)
 
         gate_spec = np.empty(tt.shape, dtype=VLBIVis._dataset_dtypes["time"])
         gate_spec["gate_start_unix"], gate_spec["gate_start_unix_offset"] = (
@@ -496,7 +497,7 @@ class CorrJob:
         )
         gate_spec["gate_start_frame"] = tt
         gate_spec["duration_frames"] = ww
-        gate_spec["dur_ratio"] = 1.0
+        gate_spec["dur_ratio"] = rr
         return gate_spec
 
     def define_scan_params_transient(
@@ -538,7 +539,7 @@ class CorrJob:
         kwargs : 'dm' and 'f0', 'pdot','wi'
         """
         period_frames = np.atleast_1d(period_frames)
-        dm = self.pointings["dm_correlator"]
+        dm = self.pointing_spec["dm_correlator"]
         bbdata_ref = self.bbdatas[self.ref_index]
 
         # First: if t0f0 is a bunch of strings, then get t0 & f0 from the BBData.
@@ -701,8 +702,8 @@ class CorrJob:
     def frame2atime(self, int_frames: np.ndarray, bbdata=None, force=False):
         """Convert frame index to astropy.Time"""
         if force and bbdata is not None:
-            ctime = bbdata["ctime"][:].copy()
-            ctime_offset = bbdata["ctime_offset"][:].copy()
+            ctime = bbdata["time0"]["ctime"][:].copy()
+            ctime_offset = bbdata["time0"]["ctime_offset"][:].copy()
         elif bbdata is not None and not force:
             raise ValueError(
                 "Are you sure you want to calculate a frame index for a non-core station? If so, pass force = True"
@@ -957,7 +958,7 @@ class CorrJob:
         del bbdata_A
         return f
 
-    def tij_other_stations(self, gate_spec, pointing_spec):
+    def tij_other_stations(self, gate_spec):
         """Do this on a per-pointing and per-station basis.
 
         For each gate and each pointing, figure out when the other stations start integrating in unix time.
@@ -966,8 +967,6 @@ class CorrJob:
         ----------
         gate_spec : np.ndarray of dtype VLBIVis._dataset_dtype['time'] and shape (n_freq, n_pointing, n_time)
             Holds attributes 'corr_ra', 'corr_dec', 'source_name', 'dm_correlator'.
-
-        pointing_spec : np.ndarray of type VLBIVis._dataset_dtype['pointing'] of shape (n_pointing).
 
         Returns
         -------
@@ -979,13 +978,14 @@ class CorrJob:
             Unix start frame of the scan at each station.
             N.b. this is kept around for metadata but useless for now.
         """
+        pointing_spec = self.pointing_spec
         iiref = self.tel_names.index(self.ref_station)
         tij_unix = gate_spec[
             "gate_start_unix"
         ]  # tij_unix.shape = (n_freq, n_pointing, n_time)
         n_tel = len(self.telescopes)
         n_freq = 1024
-        n_pointing = len(pointing_spec)
+        n_pointing = len(self.pointing_spec)
         n_time = gate_spec.shape[-1]
 
         tij_unix_sp_coarse = np.zeros(
@@ -995,15 +995,15 @@ class CorrJob:
         tij_ctimeo_sp = np.zeros_like(tij_unix_sp_coarse)  # fine times
         # Double check pointings are OK
         assert np.isclose(
-            self.pycalc_results.src_ra.deg, pointing_spec["corr_ra"]
-        ).all(), "pycalc does not match inputted pointing_spec"
+            self.pycalc_results.src_ra.deg, self.pointing_spec["corr_ra"]
+        ).all(), "pycalc does not match self.pointing_spec. initialize CorrJob again"
         assert np.isclose(
-            self.pycalc_results.src_dec.deg, pointing_spec["corr_dec"]
-        ).all(), "pycalc does not match inputted pointing_spec"
+            self.pycalc_results.src_dec.deg, self.pointing_spec["corr_dec"]
+        ).all(), "pycalc does not match self.pointing_spec. initialize CorrJob again"
         # Now we want to calculate delays for each pointing & each station & each gate.
 
         delays_per_station_per_pointing = np.zeros(n_freq * n_time)
-        for jjpointing in range(len(pointing_spec)):
+        for jjpointing in range(len(self.pointing_spec)):
             delays_all_stations = self.pycalc_results.interpolate_delays(
                 Time(tij_unix[:, jjpointing, :].flatten(), format="unix")
             )[:, 0, :, jjpointing]
@@ -1025,24 +1025,25 @@ class CorrJob:
         for iitel, telescope, bbdata in zip(
             np.arange(n_tel), self.telescopes, self.bbdatas
         ):
-            tij_atime_this_station = Time(
+            # start with a coarse astropy.Time for this station's time...
+            tij_atime_this_station_coarse = Time(
                 tij_unix_sp_coarse[iitel],
                 val2=np.zeros_like(tij_unix_sp_coarse[iitel]),
                 format="unix",
             )
+            # ...then translate to frames; use integer frame arithmetic to get the ctime right to nanosecond precision.
             tij_frame_sp[iitel] = self.atime2frame(
-                tij_atime_this_station, bbdata=bbdata, force=True
-            )  # yes, lets use a different station
-            tij_ctime_sp[iitel], tij_ctimeo_sp[iitel] = atime2ctimeo(
-                tij_atime_this_station
-            )
+                tij_atime_this_station_coarse, bbdata=bbdata, force=True
+            )  # yes, lets use a different station; 
+
+            # finally, Astropy arithmetic converts to ctime & offset
+            tij_ctime_sp[iitel], tij_ctimeo_sp[iitel] = atime2ctimeo(self.frame2atime(tij_frame_sp[iitel],bbdata=bbdata,force=True))
         return tij_ctime_sp, tij_ctimeo_sp, tij_frame_sp
 
     def run_correlator_job(
         self,
         event_id,
         gate_spec,
-        pointing_spec,
         max_lag=100,
         out_h5_file=None,
         auto_corr: bool = True,
@@ -1071,19 +1072,17 @@ class CorrJob:
         auto_corr: bool
             If True, also calculate autocorrelations
         """
-        if pointing_spec is None:
-            pointing_spec = self.pointing_spec
+
 
         tij_ctime, tij_ctime_offset, tij_frame = self.tij_other_stations(
-            gate_spec=gate_spec, pointing_spec=pointing_spec
-        )
+            gate_spec=gate_spec)
 
         ref_index = self.ref_index
         bbdata_ref = self.bbdatas[self.ref_index]
         tij_frame_top = tij_frame[self.ref_index]
         w_ij = gate_spec["duration_frames"][0]  # (npointing, nscan)
         r_ij = gate_spec["dur_ratio"]  # (nfreq, npointing, nscan)
-        dm = pointing_spec["dm_correlator"]
+        dm = self.pointing_spec["dm_correlator"]
         output = VLBIVis()
         if auto_corr:
             for iistation in np.arange(len(self.bbdatas)):
@@ -1122,6 +1121,7 @@ class CorrJob:
                 output._from_ndarray_station(
                     event_id,
                     telescope=this_station,
+                    pointing_spec=self.pointing_spec,
                     bbdata=bbdata_a,
                     auto=auto_vis,
                     gate_start_frame=tij_frame_this_station,
@@ -1157,7 +1157,7 @@ class CorrJob:
 
                     output._from_ndarray_baseline(
                         event_id=event_id,
-                        pointing_spec=pointing_spec,
+                        pointing_spec=self.pointing_spec,
                         telescope_a=self.telescopes[telA],
                         telescope_b=self.telescopes[telB],
                         cross=cross[m],
@@ -1169,7 +1169,7 @@ class CorrJob:
                     m += 1
 
                     logging.info(f"Wrote visibilities for baseline {telA}-{telB}")
-        del self.bbdatas  # free up space in memory
+        #del self.bbdatas  # free up space in memory
 
         if type(out_h5_file) is str:
             output.save(out_h5_file)

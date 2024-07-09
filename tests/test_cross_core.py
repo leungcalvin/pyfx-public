@@ -189,7 +189,7 @@ def test_continuum_calibrator():
         window=window,
         R=R,
         pycalc_results=ci,
-        DM=0,
+        DM=np.zeros_like(ra),
         station_indices=[0, 1],
         sample_rate=2.56,
         max_lag=max_lag,
@@ -423,7 +423,6 @@ def test_pulsar_pycalc_corrjob():
     vlbivis = pulsar_job.run_correlator_job(
         event_id=304050301,
         gate_spec=gate_spec,
-        pointing_spec=pointing_spec,
         max_lag=100,
         out_h5_file=None,
     )
