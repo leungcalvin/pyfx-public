@@ -76,6 +76,7 @@ def autocorr_core(
 
     for kkpointing in range(n_pointings):
         for jjscan in range(n_scan):
+            logging.info(f'Pointing {kkpointing+1}/{n_pointings}; Scan {jjscan+1}/{n_scan}')
             wij = int(window[kkpointing, jjscan])
             t_a_indices = t_a[:, kkpointing, jjscan]  # array of length 1024
             ## clip telescope A data ##
@@ -482,6 +483,7 @@ def crosscorr_core(
 
     for kkpointing in range(n_pointings):
         for jjscan in range(n_scan):
+            logging.info(f'Pointing {kkpointing+1}/{n_pointings}; Scan {jjscan+1}/{n_scan}')
             wij = window[kkpointing, jjscan]
             scan_a_fs = bbdata_a_fs[
                 :, kkpointing * n_pol : kkpointing * n_pol + n_pol, :wij
@@ -568,7 +570,7 @@ def crosscorr_core(
                                 )
                                 # cross_vis[freq, kkpointing, pol_0, pol_1, :,jjscan] = np.concatenate(
                                 #    (_vis[:max_lag+1], _vis[-max_lag:]),axis=-1)
-
+    print('all same?',(cross_vis[...,0] == cross_vis[...,1]).any())
     return cross_vis
 
 

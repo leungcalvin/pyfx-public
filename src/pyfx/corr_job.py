@@ -563,12 +563,8 @@ class CorrJob:
         else:
             raise ValueError('freq_offset_mode must be either "bbdata" or "dm"')
 
-        # Add pointing axis
-        t_i0 = (
-            t_i0[:, None] + np.zeros_like(dm, dtype=int)[None, :]
-        )  # (n_freq, n_pointing)
-
-        _tij = t_i0  # by default, only do one scan
+        _tij = t_i0 # t_i0.shape = (n_freq, n_pointing)
+         # by default, only do one scan
         # Next do t_ij for the reference station from t_i0.
 
         if num_scans_before or num_scans_after:
@@ -592,7 +588,7 @@ class CorrJob:
                     return_ctimeo=False,
                 )
                 _tij2 = self._ti0_even_spacing(
-                    t_i0 + 0.5 * period_frames,
+                    t_i0 + int(0.5 * period_frames),
                     period_frames,
                     num_scans_before=num_scans_before,
                     num_scans_after=num_scans_after,
@@ -603,8 +599,7 @@ class CorrJob:
                     (_tij1, _tij2), axis=-1
                 )  # concatenate along time axis
             if time_spacing == "overlap3":
-                _tij1 = _ti0_even_spacing(
-                    bbdata_ref,
+                _tij1 = self._ti0_even_spacing(
                     t_i0,
                     period_frames,
                     num_scans_before=num_scans_before,
@@ -612,18 +607,16 @@ class CorrJob:
                     time_ordered=time_ordered,
                     return_ctimeo=False,
                 )
-                _tij2 = _ti0_even_spacing(
-                    bbdata_ref,
-                    t_i0 + period_frames / 3,
+                _tij2 = self._ti0_even_spacing(
+                    t_i0 + int(period_frames / 3),
                     period_frames,
                     num_scans_before=num_scans_before,
                     num_scans_after=num_scans_after,
                     time_ordered=time_ordered,
                     return_ctimeo=False,
                 )
-                _tij3 = _ti0_even_spacing(
-                    bbdata_ref,
-                    t_i0 + 2 * period_frames / 3,
+                _tij3 = self._ti0_even_spacing(
+                    t_i0 + int(2 * period_frames / 3),
                     period_frames,
                     num_scans_before=num_scans_before,
                     num_scans_after=num_scans_after,
@@ -636,6 +629,8 @@ class CorrJob:
 
         window = np.atleast_2d(window)
         window = right_broadcasting(window, target_shape=_tij.shape)
+        r_ij = np.atleast_2d(r_ij)
+        r_ij = right_broadcasting(r_ij, target_shape=_tij.shape)
         assert np.issubdtype(
             window.dtype, np.integer
         ), "Window must be an integer number of frames!"
@@ -658,7 +653,7 @@ class CorrJob:
         )
         gate_spec["gate_start_frame"] = _tij
         gate_spec["duration_frames"] = window + np.zeros_like(t_ij)
-        gate_spec["dur_ratio"] = r_ij[:, None, None]
+        gate_spec["dur_ratio"] = r_ij
         validate_wij(
             gate_spec["duration_frames"], r_ij, dm=dm
         )  # check DM smearing not too large
@@ -754,6 +749,7 @@ class CorrJob:
 
         # ...but, we always need all 1024 frequencies! need to interpolate reasonably.
         ti0 = extrapolate_to_full_band(sparse_ti0, im_freq["id"][:])
+        ti0 = right_broadcasting(ti0,(1024,len(self.pointing_spec)))
         frames = self.atime2frame(ctimeo2atime(ti0["ctime"], ti0["ctime_offset"]))
         if return_ctimeo:
             return ti0["ctime"], ti0["ctime_offset"], frames
@@ -878,9 +874,7 @@ class CorrJob:
         self,
         bbdata_A,
         wfall,
-        gate_start_frame,
-        w,
-        r,
+        gate_spec,
         iiref=0,
         pointing=0,
         fscrunch=4,
@@ -891,6 +885,9 @@ class CorrJob:
         out_file: Optional[str] = None,
         bad_rfi_channels=None,
     ):
+        gate_start_frame = gate_spec['gate_start_frame']
+        w = gate_spec['duration_frames']
+        r = gate_spec['dur_ratio']
         wwfall = np.abs(wfall) ** 2
         wwfall -= np.nanmedian(wwfall, axis=-1)[:, :, None]
         wwfall /= median_abs_deviation(wwfall, axis=-1, nan_policy="omit")[:, :, None]
@@ -900,8 +897,8 @@ class CorrJob:
         del wwfall
 
         y = np.arange(1024)
+        f = plt.figure()
         for iiscan in range(gate_start_frame.shape[-1]):
-            f = plt.figure()
             waterfall = sww[:, pointing] + sww[:, pointing + 1]
             waterfall -= np.nanmedian(waterfall)
             plt.imshow(
@@ -910,7 +907,7 @@ class CorrJob:
 
             x_start = gate_start_frame[:, pointing, iiscan] / (tscrunch)
 
-            x_end = x_start + w[pointing, iiscan] / tscrunch
+            x_end = x_start + w[:,pointing, iiscan] / tscrunch
             x_mid = x_start + (x_end - x_start) * 0.5
             x_rminus = x_mid - (x_end - x_start) * 0.5 * r[:, pointing, iiscan]
             x_rplus = x_mid + (x_end - x_start) * 0.5 * r[:, pointing, iiscan]
@@ -1120,7 +1117,7 @@ class CorrJob:
                 )
 
                 # ...and replace with nans afterward.
-                auto_vis = auto_vis + (auto_mask[:, :, None, None, None, :] * np.nan)
+                #auto_vis = auto_vis + (auto_mask[:, :, None, None, None, :] * np.nan)
                 output._from_ndarray_station(
                     event_id,
                     telescope=this_station,
