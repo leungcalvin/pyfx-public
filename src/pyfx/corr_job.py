@@ -1088,10 +1088,13 @@ class CorrJob:
             for iistation in np.arange(len(self.bbdatas)):
                 this_station = self.telescopes[iistation]
                 bbdata_a = self.bbdatas[iistation]
+                gate_this_station = np.empty(gate_spec.shape,dtype = gate_spec.dtype)
+                gate_this_station['gate_start_frame'] = tij_frame[iistation]
+                gate_this_station['gate_start_unix'] = tij_ctime[iistation]
+                gate_this_station['gate_start_unix_offset'] = tij_ctime_offset[iistation]
+                gate_this_station['duration_frames'] = gate_spec['duration_frames'] 
+                gate_this_station['dur_ratio'] = gate_spec['dur_ratio']
                 tij_frame_this_station = tij_frame[iistation]
-                tij_ctime_this_station = tij_ctime[iistation]
-                tij_ctimeo_this_station = tij_ctime_offset[iistation]
-
                 # there are scans with missing data: check the start and end index
                 # ...but we just let the correlator correlate
                 auto_mask = (tij_frame_this_station < 0) + (
@@ -1124,11 +1127,7 @@ class CorrJob:
                     pointing_spec=self.pointing_spec,
                     bbdata=bbdata_a,
                     auto=auto_vis,
-                    gate_start_frame=tij_frame_this_station,
-                    gate_start_unix=tij_ctime_this_station,
-                    gate_start_unix_offset=tij_ctimeo_this_station,
-                    window=w_ij,
-                    r=r_ij,
+                    gate_spec = gate_this_station,
                 )
                 logging.info(f"Wrote autos for station {iistation}")
         if cross_corr:
@@ -1154,17 +1153,19 @@ class CorrJob:
                     tij_ctime_b = tij_ctime[telB]  # extract start frame for station
                     avg_ctime = (tij_ctime[telA] + tij_ctime[telB]) * 0.5
                     avg_ctimeo = (tij_ctime_offset[telA] + tij_ctime_offset[telB]) * 0.5
-
+                    gate_this_baseline = np.empty(gate_spec.shape,dtype = gate_spec.dtype)
+                    gate_this_baseline['gate_start_unix'] = avg_ctime
+                    gate_this_baseline['gate_start_unix_offset'] = avg_ctimeo
+                    gate_this_baseline['duration_frames'] = gate_spec['duration_frames']
+                    gate_this_baseline['dur_ratio'] = gate_spec['dur_ratio']
+                    gate_this_baseline['duration_frames'] = -1000000000000 # no meaningful frame count for baseline group! sentinel value should preclude use in most scenarios
                     output._from_ndarray_baseline(
                         event_id=event_id,
                         pointing_spec=self.pointing_spec,
                         telescope_a=self.telescopes[telA],
                         telescope_b=self.telescopes[telB],
                         cross=cross[m],
-                        gate_start_unix=avg_ctime,
-                        gate_start_unix_offset=avg_ctimeo,
-                        window=w_ij,
-                        r=r_ij,
+                        gate_spec = gate_this_station,
                     )
                     m += 1
 
