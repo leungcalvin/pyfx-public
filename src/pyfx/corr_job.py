@@ -55,7 +55,7 @@ from scipy.interpolate import interp1d
 from scipy.stats import median_abs_deviation
 
 from pyfx.bbdata_io import get_all_im_freq, get_all_time0, station_from_bbdata
-from pyfx.core_correlation_station import autocorr_core, cross_correlate_baselines
+from pyfx.core_correlation_station import autocorr_core, crosscorr_core,fringestop_station
 
 """Tools for extracting good values of t,w,r for correlator gating.
 The main functions provided are get_twr_continuum and get_twr_singlepulse"""
@@ -843,7 +843,6 @@ class CorrJob:
         scan_numbers = np.hstack(
             (np.arange(0, num_scans_after + 1), np.arange(-num_scans_before, 0))
         )
-        print(scan_numbers)
         # this makes the scan number corresponding to ti0 come first in the array: e.g. if the on-pulse comes in the 5th scan period, the t_ij array is ordered as (5,6,7,...0,1,2,3,4)
         if time_ordered:  # this makes the scans time-ordered, e.g. 0,1,2,3,...8,9.
             scan_numbers = sorted(scan_numbers)
@@ -1043,31 +1042,32 @@ class CorrJob:
         gate_spec,
         max_lag=100,
         out_h5_file=None,
-        auto_corr: bool = True,
-        cross_corr: bool = True
+        auto_corr = True,
+        cross_corr = True,
+        clear_bbdata = True,
     ):
         """Run auto- and cross- correlations.
+        All BBData are read in at once and ordered using fill_waterfall.
+        Loops over stations, does autos.
+        Then loops over stations, does fringestopping.
+        Then loops over outrigger stations only, cross-correlates baselines.
 
-        Loops over baselines, then frequencies, then pointings.
-        Are all read in at once and ordered using fill_waterfall.
-        This works well on short baseband dumps.
-        Memory cost: 2 x BBData,
-        I/O cost:N*(N-1) / 2 x BBData.
+        This works well on short baseband dumps, but is quite costly RAM-wise since everything is read in at the beginning.
 
         Parameters
         ----------
-        gate_start_frame : np.ndarray
-            Of topocentric start indices for the on-signal gating relative to the start of the dump as a function of (n_station, n_freq, n_pointing, n_time)
-        w_ij : np.ndarray
-            Of start times as a function of (n_pointing, n_time)
-        r_ij : np.ndarray
+        event_id : int
+            For writing VLBIVis metadata.
+        gate_spec : np.ndarray
             Of start times as a function of (n_freq, n_pointing, n_time)
-        ref_index : intdec_target
-            index corresponding to bbdata where topocentric time is defined (CHIME)
-        dm : float
-            A dispersion measure for de-smearing. Fractional precision needs to be 10%.
+        max_lag : int
+            Maximum lag.
+        out_h5_file : string
+            Absolute path to .h5 including the extension
         auto_corr: bool
-            If True, also calculate autocorrelations
+            If True, calculate all autocorrelations. If the empty list is passed, will skip.
+        cross_corr : bool
+            If True, calculate all cross-correlations. If the empty list is passed, will skip.
         """
 
 
@@ -1077,97 +1077,136 @@ class CorrJob:
         ref_index = self.ref_index
         bbdata_ref = self.bbdatas[self.ref_index]
         tij_frame_top = tij_frame[self.ref_index]
+        n_pointings = bbdata_ref["tiedbeam_baseband"].shape[1] // 2
+        n_scan = np.size(tij_frame_top, axis=-1)
+        n_pol = 2
         w_ij = gate_spec["duration_frames"][0]  # (npointing, nscan)
         r_ij = gate_spec["dur_ratio"]  # (nfreq, npointing, nscan)
         dm = self.pointing_spec["dm_correlator"]
         output = VLBIVis()
-        if auto_corr:
-            for iistation in np.arange(len(self.bbdatas)):
-                this_station = self.telescopes[iistation]
-                bbdata_a = self.bbdatas[iistation]
-                gate_this_station = np.empty(gate_spec.shape,dtype = gate_spec.dtype)
-                gate_this_station['gate_start_frame'] = tij_frame[iistation]
-                gate_this_station['gate_start_unix'] = tij_ctime[iistation]
-                gate_this_station['gate_start_unix_offset'] = tij_ctime_offset[iistation]
-                gate_this_station['duration_frames'] = gate_spec['duration_frames'] 
-                gate_this_station['dur_ratio'] = gate_spec['dur_ratio']
-                tij_frame_this_station = tij_frame[iistation]
-                # there are scans with missing data: check the start and end index
-                # ...but we just let the correlator correlate
-                auto_mask = (tij_frame_this_station < 0) + (
-                    tij_frame_this_station + w_ij > bbdata_a.ntime
-                )
-                np.clip(
-                    tij_frame_this_station,
-                    0,
-                    bbdata_a.ntime - w_ij,
-                    out=tij_frame_this_station,
-                )
-                logging.info(
-                    f"Calculating autos for station {iistation}; {np.sum(auto_mask)}/{auto_mask.size} scans out of bounds"
-                )
-                auto_vis = autocorr_core(
-                    DM=dm,
-                    bbdata_a=bbdata_a,
-                    t_a=tij_frame_this_station,
-                    window=w_ij,
-                    R=r_ij,
-                    max_lag=self.max_lag,
-                    n_pol=2,
-                )
+        if auto_corr == True: # do all stations
+            auto_corr = np.arange(len(self.bbdatas))
+        assert max(auto_corr) < len(self.bbdatas)
 
-                # ...and replace with nans afterward.
-                #auto_vis = auto_vis + (auto_mask[:, :, None, None, None, :] * np.nan)
-                output._from_ndarray_station(
-                    event_id,
-                    telescope=this_station,
-                    pointing_spec=self.pointing_spec,
-                    bbdata=bbdata_a,
-                    auto=auto_vis,
-                    gate_spec = gate_this_station,
-                )
-                logging.info(f"Wrote autos for station {iistation}")
-        if cross_corr:
-            cross = cross_correlate_baselines(
-                bbdatas=self.bbdatas,
+        if cross_corr == True: # do all baselines with CHIME x outrigger station, enumerated by their pycalc index
+            cross_corr = np.arange(1,len(self.bbdatas))
+        assert max(cross_corr) < len(self.bbdatas)
+
+        stations_to_fringestop = set(cross_corr) # from cross_corr, figure out which stations need to be fringestopped
+        stations_to_fringestop.add(ref_index) # also need to fringestop ref station
+        stations_to_fringestop = list(stations_to_fringestop)
+        stations_to_fringestop.sort()
+
+        for iistation in auto_corr:
+            this_station = self.telescopes[iistation]
+            logging.info(f'Autos for {this_station}')
+            bbdata_a = self.bbdatas[iistation]
+            gate_this_station = np.empty(gate_spec.shape,dtype = gate_spec.dtype)
+            gate_this_station['gate_start_frame'] = tij_frame[iistation]
+            gate_this_station['gate_start_unix'] = tij_ctime[iistation]
+            gate_this_station['gate_start_unix_offset'] = tij_ctime_offset[iistation]
+            gate_this_station['duration_frames'] = gate_spec['duration_frames'] 
+            gate_this_station['dur_ratio'] = gate_spec['dur_ratio']
+            tij_frame_this_station = tij_frame[iistation]
+            # there are scans with missing data: check the start and end index
+            # ...but we just let the correlator correlate
+            auto_mask = (tij_frame_this_station < 0) + (
+                tij_frame_this_station + w_ij > bbdata_a.ntime
+            )
+            np.clip(
+                tij_frame_this_station,
+                0,
+                bbdata_a.ntime - w_ij,
+                out=tij_frame_this_station,
+            )
+            logging.info(
+                f"Calculating autos for station {iistation}; {np.sum(auto_mask)}/{auto_mask.size} scans out of bounds"
+            )
+            auto_vis = autocorr_core(
+                DM=dm,
+                bbdata_a=bbdata_a,
+                t_a=tij_frame_this_station,
+                window=w_ij,
+                R=r_ij,
+                max_lag=self.max_lag,
+                n_pol=2,
+            )
+
+            # ...and replace with nans afterward.
+            #auto_vis = auto_vis + (auto_mask[:, :, None, None, None, :] * np.nan)
+            output._from_ndarray_station(
+                event_id,
+                telescope=this_station,
+                pointing_spec=self.pointing_spec,
+                bbdata=bbdata_a,
+                auto=auto_vis,
+                gate_spec = gate_this_station,
+            )
+            logging.info(f"Wrote autos for station {iistation}")
+            del auto_vis # save memory
+        
+        # fringestop all relevant stations
+        fringestopped_stations = np.zeros((len(stations_to_fringestop), 1024, n_pointings * 2, n_scan, np.max(w_ij.flatten())),dtype = self.bbdatas[0]['tiedbeam_baseband'][:].dtype)
+        for iistation in stations_to_fringestop:
+            self.bbdatas[iistation]["tiedbeam_baseband"][:] = np.nan_to_num(
+                self.bbdatas[iistation]["tiedbeam_baseband"][:], nan=0, posinf=0, neginf=0
+            )
+            fringestopped_stations[iistation] = fringestop_station(
+                bbdata=self.bbdatas[iistation],
                 bbdata_top=bbdata_ref,
+                pointing_spec = self.pointing_spec,
                 t_a=tij_frame_top,
                 window=w_ij,
                 R=r_ij,
                 pycalc_results=self.pycalc_results,
-                DM=dm,
-                station_indices=np.array(range(len(self.bbdatas))),
-                max_lag=self.max_lag,
-                n_pol=2,
-                weight=None,
+                station_index=iistation,
                 ref_frame=ref_index,
-                fast=True,
+                assign_pointing='1to1' # use 1to1 for DM refinement trials or calibrator survey; use 'nearest' for correlator-repointing run.
+            ) # bbdata_fs.shape = (nfreq, npointing, nscan, scan_width)
+        
+        # correlate all N^2 baselines
+        out_cross = [] 
+        for iioutrigger in cross_corr: # 
+            f0 = bbdata_ref.index_map["freq"]["centre"]  # shape is (nfreq)
+            assert (f0 == self.bbdatas[iioutrigger].index_map['freq']['centre']).all(), f"Mismatched frequencies between station 0 & station {iioutrigger}! Run fill_waterfall() on both to fix"
+            vis_shape = (bbdata_ref.nfreq, n_pointings, n_pol, n_pol, 2 * max_lag + 1, n_scan)
+            # loops over scans are within crosscorr_core
+            cross = crosscorr_core(
+                bbdata_a_fs=fringestopped_stations[ref_index],
+                bbdata_b_fs=fringestopped_stations[iioutrigger],
+                window=w_ij,
+                R=r_ij,
+                f0=f0,
+                DM=dm,
+                index_A=ref_index,
+                index_B=iioutrigger,
+                max_lag=self.max_lag,
+                ref_frame=ref_index,
             )
-            m = 0
-            for telA in range(len(self.bbdatas) - 1):
-                for telB in range(telA + 1, len(self.bbdatas)):
-                    tij_ctime_a = tij_ctime[telA]  # extract start frame for station
-                    tij_ctime_b = tij_ctime[telB]  # extract start frame for station
-                    avg_ctime = (tij_ctime[telA] + tij_ctime[telB]) * 0.5
-                    avg_ctimeo = (tij_ctime_offset[telA] + tij_ctime_offset[telB]) * 0.5
-                    gate_this_baseline = np.empty(gate_spec.shape,dtype = gate_spec.dtype)
-                    gate_this_baseline['gate_start_unix'] = avg_ctime
-                    gate_this_baseline['gate_start_unix_offset'] = avg_ctimeo
-                    gate_this_baseline['duration_frames'] = gate_spec['duration_frames']
-                    gate_this_baseline['dur_ratio'] = gate_spec['dur_ratio']
-                    gate_this_baseline['duration_frames'] = -1000000000000 # no meaningful frame count for baseline group! sentinel value should preclude use in most scenarios
-                    output._from_ndarray_baseline(
-                        event_id=event_id,
-                        pointing_spec=self.pointing_spec,
-                        telescope_a=self.telescopes[telA],
-                        telescope_b=self.telescopes[telB],
-                        cross=cross[m],
-                        gate_spec = gate_this_station,
-                    )
-                    m += 1
+            tij_ctime_a = tij_ctime[ref_index]  # extract start frame for station
+            tij_ctime_b = tij_ctime[iioutrigger]  # extract start frame for station
+            avg_ctime = (tij_ctime[ref_index] + tij_ctime[iioutrigger]) * 0.5
+            avg_ctimeo = (tij_ctime_offset[ref_index] + tij_ctime_offset[iioutrigger]) * 0.5
+            gate_this_baseline = np.empty(gate_spec.shape,dtype = gate_spec.dtype)
+            gate_this_baseline['gate_start_unix'] = avg_ctime
+            gate_this_baseline['gate_start_unix_offset'] = avg_ctimeo
+            gate_this_baseline['duration_frames'] = gate_spec['duration_frames']
+            gate_this_baseline['dur_ratio'] = gate_spec['dur_ratio']
+            gate_this_baseline['duration_frames'] = -1000000000000 # no meaningful frame count for baseline group! sentinel value should preclude use in most scenarios
+            output._from_ndarray_baseline(
+                event_id=event_id,
+                pointing_spec=self.pointing_spec,
+                telescope_a=self.telescopes[ref_index],
+                telescope_b=self.telescopes[iioutrigger],
+                cross=cross,
+                gate_spec = gate_this_station,
+            )
 
-                    logging.info(f"Wrote visibilities for baseline {telA}-{telB}")
-        #del self.bbdatas  # free up space in memory
+            logging.info(f"Wrote visibilities for baseline {self.tel_names[ref_index]}-{self.tel_names[iioutrigger]}")
+            del cross
+        if clear_bbdata:
+            del self.bbdatas # free up space in memory
+            del fringestopped_stations
 
         if type(out_h5_file) is str:
             output.save(out_h5_file)
