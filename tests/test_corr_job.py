@@ -31,16 +31,17 @@ kko.info.name = "kko"
 
 
 def test_corr_job_runs_filled_multiple_phase_centers():
+    num_pointings = 3
     chime_bbdata = BBData.from_file(chime_file)
     out_bbdata = BBData.from_file(kko_file)
-    ra = np.atleast_1d(chime_bbdata["tiedbeam_locations"]["ra"][0]) + np.zeros(10)
-    dec = np.atleast_1d(chime_bbdata["tiedbeam_locations"]["dec"][0]) + np.zeros(10)
+    ra = np.atleast_1d(chime_bbdata["tiedbeam_locations"]["ra"][0]) + np.zeros(num_pointings)
+    dec = np.atleast_1d(chime_bbdata["tiedbeam_locations"]["dec"][0]) + np.zeros(num_pointings)
     telescopes = [chime, kko]
     fill_waterfall(chime_bbdata, write=True)
     fill_waterfall(out_bbdata, write=True)
     from coda.core import VLBIVis
 
-    pointing_spec = np.empty((10,), dtype=VLBIVis._dataset_dtypes["pointing"])
+    pointing_spec = np.empty((num_pointings,), dtype=VLBIVis._dataset_dtypes["pointing"])
     pointing_spec["corr_ra"][:] = ra
     pointing_spec["corr_dec"][:] = dec
     pointing_spec["source_name"][:] = "NCP_pytest"
@@ -53,18 +54,18 @@ def test_corr_job_runs_filled_multiple_phase_centers():
         ref_station="chime",
     )
 
-    gate_spec = ncp_job.define_scan_params_transient(
+    gate_spec = ncp_job.define_scan_params_transient( 
         start_or_toa="start",
         t0f0=("start", "top"),
         time_spacing="even",
         freq_offset_mode="bbdata",
         window=chime_bbdata.ntime // 10,
-        r_ij=np.ones(1024),
-        period_frames=chime_bbdata.ntime // 10,
-        num_scans_before=10,
-        num_scans_after=8,
+        r_ij=1,
+        period_frames=np.zeros(num_pointings) + chime_bbdata.ntime // 10, 
+        num_scans_before=2,
+        num_scans_after=3,
     )
-    nstation, nfreq, npointing, ntime = (2, 1024, 10, 10 + 8 + 1)
+    nstation, nfreq, npointing, ntime = (2, 1024, num_pointings, 2 + 1 + 3)
     assert gate_spec.shape == (nfreq, npointing, ntime)
     assert (
         np.abs(
@@ -78,7 +79,13 @@ def test_corr_job_runs_filled_multiple_phase_centers():
         event_id=256150292,
         gate_spec=gate_spec,
         out_h5_file=False,
+        auto_corr = True,
+        assign_pointing = 'nearest', # nearest for multiple phase centers
     )
+    for ii in range(num_pointings):
+        assert (vis['chime-kko']['vis'][:,ii] == vis['chime-kko']['vis'][:,0]).all(), "CHIME-KKO Cross not identical?"
+        assert (vis['chime']['auto'][:,ii] == vis['chime']['auto'][:,0]).all(), "CHIME Auto not identical?"
+        assert (vis['kko']['auto'][:,ii] == vis['kko']['auto'][:,0]).all(), "KKO Auto not identical?"
 
 def test_corr_job_runs_no_fill():
     """Same as the above, but no fill_waterfall"""
@@ -110,7 +117,7 @@ def test_corr_job_runs_no_fill():
         time_spacing="even",
         freq_offset_mode="bbdata",
         window=chime_bbdata.ntime // 10,
-        r_ij=np.ones(1024),
+        r_ij= 1,
         period_frames=chime_bbdata.ntime // 10,
         num_scans_before=10,
         num_scans_after=8,

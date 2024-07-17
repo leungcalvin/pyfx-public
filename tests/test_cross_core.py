@@ -13,7 +13,7 @@ from baseband_analysis.core.sampling import fill_waterfall
 from pycalc11 import Calc
 from pyfx import corr_job
 from pyfx.core_correlation import autocorr_core, crosscorr_core
-from pyfx.core_correlation_station import autocorr_core, cross_correlate_baselines
+from pyfx.core_correlation_station import autocorr_core
 from pyfx.core_vis import extract_frame_delay, extract_subframe_delay
 
 chime = ac.EarthLocation.from_geocentric(
@@ -129,7 +129,12 @@ def test_continuum_calibrator():
 
     ra = np.atleast_1d(ra_telA)
     dec = np.atleast_1d(dec_telA)
-
+    from coda.core import VLBIVis
+    pointing_spec = np.empty((1,),dtype = VLBIVis._dataset_dtypes['pointing'])
+    pointing_spec['corr_ra'] = ra
+    pointing_spec['corr_dec'] = dec
+    pointing_spec['dm_correlator'] = 0
+    pointing_spec['source_name'] = 'J0117+8928_pytest'
     time0 = Time(
         chime_bbdata["time0"]["ctime"],
         val2=chime_bbdata["time0"]["ctime_offset"],
@@ -182,23 +187,60 @@ def test_continuum_calibrator():
         d_interval=1,
     )
     ci.run_driver()
-    cross = cross_correlate_baselines(
-        bbdata_top=chime_bbdata,
-        bbdatas=[chime_bbdata, out_bbdata],
-        t_a=t_a,
-        window=window,
-        R=R,
-        pycalc_results=ci,
-        DM=np.zeros_like(ra),
-        station_indices=[0, 1],
-        sample_rate=2.56,
-        max_lag=max_lag,
-        n_pol=2,
-        ref_frame=0,
-        weight=weight,
-        fast=True,
-    )[0]
+    # cross = cross_correlate_baselines(
+    #     bbdata_top=chime_bbdata,
+    #     bbdatas=[chime_bbdata, out_bbdata],
+    #     t_a=t_a,
+    #     window=window,
+    #     R=R,
+    #     pycalc_results=ci,
+    #     DM=np.zeros_like(ra),
+    #     station_indices=[0, 1],
+    #     sample_rate=2.56,
+    #     max_lag=max_lag,
+    #     n_pol=2,
+    #     ref_frame=0,
+    #     weight=weight,
+    #     fast=True,
+    # )[0]
 
+    fringestopped_stations = np.zeros((2, 
+                                       1024, 
+                                       2, 
+                                       1, 
+                                       np.max(window.flatten())
+                                       ),
+        dtype = chime_bbdata['tiedbeam_baseband'].dtype)
+    from pyfx.core_correlation_station import fringestop_station,crosscorr_core
+
+    for iistation,bbdata in zip([0,1],[chime_bbdata,out_bbdata]):
+        fringestopped_stations[iistation] = fringestop_station(
+            bbdata=bbdata,
+            bbdata_top=chime_bbdata,
+            pointing_spec = pointing_spec,
+            t_a=t_a,
+            window=window,
+            R=np.ones((1024,1,1)),
+            pycalc_results=ci,
+            station_index=iistation,
+            ref_frame=0,
+            assign_pointing = '1to1', # use 1to1 for DM refinement trials or calibrator survey; use 'nearest' for correlator-repointing run.
+        )
+    f0 = chime_bbdata.index_map["freq"]["centre"]  # shape is (nfreq)
+    vis_shape = (1024, 1, 2, 2, 2 * max_lag + 1, 1)
+    # loops over scans are within crosscorr_core
+    cross = crosscorr_core(
+        bbdata_a_fs=fringestopped_stations[0],
+        bbdata_b_fs=fringestopped_stations[1],
+        window=window,
+        R=np.ones((1024,1,1)),
+        f0=f0,
+        DM=np.array([0]),
+        index_A=0,
+        index_B=1,
+        max_lag=max_lag,
+        ref_frame=0,
+    )
     ### rfi flagging
     cutoff_00 = np.median(
         np.median(np.abs(cross[:, 0, 0, 0, :, 0]) ** 2, axis=-1)
@@ -414,9 +456,9 @@ def test_pulsar_pycalc_corrjob():
         start_or_toa="start",
         t0f0=(toa, 800.0),  # (1689783027.6518016, 800.0),
         freq_offset_mode="dm",
-        window=[761],
-        period_frames=np.array([1000], dtype=int),
-        r_ij=np.ones(1024) * 1,
+        window=761,
+        period_frames=1000,
+        r_ij=1,
         num_scans_before=0,
         num_scans_after=0,
     )

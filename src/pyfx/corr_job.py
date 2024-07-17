@@ -438,12 +438,14 @@ class CorrJob:
         return t0, f0
 
     def define_scan_params_continuum(self, equal_duration=True, pad=100):
-        """Return start frame and number of window frames ("t" and "w") by looking at the nan pattern in telA_bbdata, making use of ~all the data we have.
+        """Tells the correlator when to start integrating, how long to start integrating, for each station. Run this after the CorrJob() is instantiated.
 
         This is an appropriate way to get the t,w,r data for a single phase-center pointing on a continuum source.
-
         To take into account that the different boundaries of the data, we trim the edges of the scan.
-        We remove :pad: frames from both the left and right of the integration.gate_start_frame & ww.
+        We remove :pad: frames from both the left and right of the BBData.
+
+        Return start frame and number of window frames ("t" and "w") by looking at the nan pattern in telA_bbdata, making use of ~all the data we have.
+
 
         Parameters
         ----------
@@ -563,7 +565,7 @@ class CorrJob:
         else:
             raise ValueError('freq_offset_mode must be either "bbdata" or "dm"')
 
-        _tij = t_i0 # t_i0.shape = (n_freq, n_pointing)
+        _tij = t_i0[:,:,None] # t_i0.shape = (n_freq, n_pointing); _tij.shape = (n_freq, n_pointing, 1)
          # by default, only do one scan
         # Next do t_ij for the reference station from t_i0.
 
@@ -626,14 +628,22 @@ class CorrJob:
                 _tij = np.concatenate(
                     (_tij1, _tij2, _tij3), axis=-1
                 )  # concatenate along time axis
-
-        window = np.atleast_2d(window)
-        window = right_broadcasting(window, target_shape=_tij.shape)
-        r_ij = np.atleast_2d(r_ij)
-        r_ij = right_broadcasting(r_ij, target_shape=_tij.shape)
+        
+        window = np.atleast_1d(window)
         assert np.issubdtype(
             window.dtype, np.integer
         ), "Window must be an integer number of frames!"
+        if window.ndim == 1: # (n_pointing)
+            window = np.zeros(1024)[:,None] + window[None,:] # (n_freq, n_pointing)
+        if window.ndim == 2: # (n_freq, n_pointing)
+            window = window[:,:,None] + np.zeros(_tij.shape[-1]) # (n_freq, n_pointing, n_time)
+        
+        r_ij = np.atleast_1d(r_ij)
+        if r_ij.ndim == 1: # (n_pointing)
+            r_ij = np.zeros(1024)[:,None] + r_ij[None,:] # (n_freq, n_pointing)
+        if r_ij.ndim == 2: # (n_freq, n_pointing)
+            r_ij = r_ij[:,:,None] + np.zeros(_tij.shape[-1]) # (n_freq, n_pointing, n_time)
+        
         if start_or_toa == "toa":
             _tij -= window  # Scan duration given by :Window:, not :period_frames:!
             logging.info(
@@ -643,10 +653,8 @@ class CorrJob:
         logging.info(
             "Success: generated a valid set of integrations! Rounding to nearest 2.56us to create topocentric gate specification."
         )
-        t_ij = self.frame2atime(int_frames=_tij)
-        window = np.broadcast_to(
-            right_broadcasting(window, target_shape=t_ij.shape), t_ij.shape
-        )
+        t_ij = self.frame2atime(int_frames=_tij) # (n_freq, n_pointing)
+
         gate_spec = np.empty(_tij.shape, dtype=VLBIVis._dataset_dtypes["time"])
         gate_spec["gate_start_unix"], gate_spec["gate_start_unix_offset"] = (
             atime2ctimeo(t_ij)
@@ -749,11 +757,12 @@ class CorrJob:
 
         # ...but, we always need all 1024 frequencies! need to interpolate reasonably.
         ti0 = extrapolate_to_full_band(sparse_ti0, im_freq["id"][:])
-        ti0 = right_broadcasting(ti0,(1024,len(self.pointing_spec)))
+        ti0 = np.broadcast_to(ti0[:,None],(1024,len(self.pointing_spec)))  # ti0.shape = (1024, n_pointing) afterward
         frames = self.atime2frame(ctimeo2atime(ti0["ctime"], ti0["ctime_offset"]))
         if return_ctimeo:
             return ti0["ctime"], ti0["ctime_offset"], frames
         else:
+            print(frames.shape)
             return frames
 
     def _ti0_from_t00_dm(self, t00, f0, dm, fi, return_ctimeo=False):
@@ -1044,6 +1053,7 @@ class CorrJob:
         out_h5_file=None,
         auto_corr = True,
         cross_corr = True,
+        assign_pointing = '1to1',
         clear_bbdata = True,
     ):
         """Run auto- and cross- correlations.
@@ -1077,16 +1087,20 @@ class CorrJob:
         ref_index = self.ref_index
         bbdata_ref = self.bbdatas[self.ref_index]
         tij_frame_top = tij_frame[self.ref_index]
-        n_pointings = bbdata_ref["tiedbeam_baseband"].shape[1] // 2
+        n_pointings = len(self.pointing_spec)
         n_scan = np.size(tij_frame_top, axis=-1)
         n_pol = 2
         w_ij = gate_spec["duration_frames"][0]  # (npointing, nscan)
         r_ij = gate_spec["dur_ratio"]  # (nfreq, npointing, nscan)
         dm = self.pointing_spec["dm_correlator"]
         output = VLBIVis()
-        if auto_corr == True: # do all stations
+        if auto_corr == False:
+            auto_corr = []
+        elif auto_corr == True: # do all stations
             auto_corr = np.arange(len(self.bbdatas))
-        assert max(auto_corr) < len(self.bbdatas)
+
+        for iia in auto_corr:
+            assert iia < len(self.bbdatas)
 
         if cross_corr == True: # do all baselines with CHIME x outrigger station, enumerated by their pycalc index
             cross_corr = np.arange(1,len(self.bbdatas))
@@ -1123,6 +1137,8 @@ class CorrJob:
                 f"Calculating autos for station {iistation}; {np.sum(auto_mask)}/{auto_mask.size} scans out of bounds"
             )
             auto_vis = autocorr_core(
+                pointing_spec = self.pointing_spec, 
+                assign_pointing = assign_pointing,
                 DM=dm,
                 bbdata_a=bbdata_a,
                 t_a=tij_frame_this_station,
@@ -1161,11 +1177,10 @@ class CorrJob:
                 pycalc_results=self.pycalc_results,
                 station_index=iistation,
                 ref_frame=ref_index,
-                assign_pointing='1to1' # use 1to1 for DM refinement trials or calibrator survey; use 'nearest' for correlator-repointing run.
+                assign_pointing = assign_pointing, # use 1to1 for DM refinement trials or calibrator survey; use 'nearest' for correlator-repointing run.
             ) # bbdata_fs.shape = (nfreq, npointing, nscan, scan_width)
         
         # correlate all N^2 baselines
-        out_cross = [] 
         for iioutrigger in cross_corr: # 
             f0 = bbdata_ref.index_map["freq"]["centre"]  # shape is (nfreq)
             assert (f0 == self.bbdatas[iioutrigger].index_map['freq']['centre']).all(), f"Mismatched frequencies between station 0 & station {iioutrigger}! Run fill_waterfall() on both to fix"
@@ -1190,16 +1205,16 @@ class CorrJob:
             gate_this_baseline = np.empty(gate_spec.shape,dtype = gate_spec.dtype)
             gate_this_baseline['gate_start_unix'] = avg_ctime
             gate_this_baseline['gate_start_unix_offset'] = avg_ctimeo
+            gate_this_baseline['gate_start_frame'] = -1000000000000 # no meaningful frame count for baseline group! sentinel value should preclude use in most scenarios
             gate_this_baseline['duration_frames'] = gate_spec['duration_frames']
             gate_this_baseline['dur_ratio'] = gate_spec['dur_ratio']
-            gate_this_baseline['duration_frames'] = -1000000000000 # no meaningful frame count for baseline group! sentinel value should preclude use in most scenarios
             output._from_ndarray_baseline(
                 event_id=event_id,
                 pointing_spec=self.pointing_spec,
                 telescope_a=self.telescopes[ref_index],
                 telescope_b=self.telescopes[iioutrigger],
                 cross=cross,
-                gate_spec = gate_this_station,
+                gate_spec = gate_this_baseline,
             )
 
             logging.info(f"Wrote visibilities for baseline {self.tel_names[ref_index]}-{self.tel_names[iioutrigger]}")

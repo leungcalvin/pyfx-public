@@ -24,8 +24,27 @@ K_DM = 1 / 2.41e-4  # in s MHz^2 / (pc cm^-3)
 MAX_FRAC_SAMP_LENGTH = 32187  # maximum FFT length, chosen to keep delay rate drift (on Earth) within 1/10th of a frame
 
 def get_pointing_map(pointing_spec,tb_locations,mode = '1to1',tolerance_arcsec = 10,ties_ok = False):
-    assert np.diff(tb_locations['ra'])[::2] == 0, "Polarizations not repeated?" # check repeated pols
-    assert np.diff(tb_locations['dec'])[::2] == 0, "Polarizations not repeated?" # check repeated pols
+    """Assign pointings to beam indices.
+
+    Parameters
+    ----------
+    pointing_spec : np.ndarray of shape (npointing,)
+
+    tb_locations : np.ndarray of shape (nbeam,) where nbeam is 2x the number of distinct locations (i.e. dual pol beams)
+
+    Returns
+    -------
+    beam_indices : list of ints
+        For N pointings, this will return a list of length 2N.
+        If mode = '1to1', then for N pointings it will return [0,1,2,3,...], 
+        and assume that the jth beamformer pointing is the 2jth beam, and that the 2j+1th beam is the other polarization.
+
+        If mode = 'nearest':
+        It will take the nearest beam within tolerance_arcsecond.
+    """
+
+    assert (np.diff(tb_locations['ra'][:])[::2] == 0).all(), "Polarizations not repeated?" # check repeated pols
+    assert (np.diff(tb_locations['dec'][:])[::2] == 0).all(), "Polarizations not repeated?" # check repeated pols
     tbl = tb_locations[::2].copy()
     beam_indices = []    
     if mode == '1to1':
@@ -33,17 +52,19 @@ def get_pointing_map(pointing_spec,tb_locations,mode = '1to1',tolerance_arcsec =
         beam_indices = np.arange(len(pointing_spec))
     if mode == 'nearest':
         from astropy.coordinates import SkyCoord
-        beam_sc = SkyCoord(tb_locations['ra'],tb_locations['dec'],unit = 'deg')
+        beam_sc = SkyCoord(tb_locations['ra'][::2],tb_locations['dec'][::2],unit = 'deg')
         for iipointing, pointing in enumerate(pointing_spec):
-            seps_this_pointing = SkyCoord(pointing['corr_ra'],dec=pointing['corr_dec'],unit = 'deg').separation(beam_sc).to_value('arcsec')
+            seps_this_pointing = SkyCoord(ra = pointing['corr_ra'],dec = pointing['corr_dec'],unit = 'deg').separation(beam_sc).to_value('arcsec')
             min_dist = min(seps_this_pointing)
             assert min_dist < tolerance_arcsec
             if not ties_ok:
                 assert np.sum(seps_this_pointing  == min_dist) == 1, "Two exactly equidistant pointings! Not allowed."
-            beam_indices.append(np.argmin(min_dist))
+            beam_indices.append(2 * np.argmin(min_dist))
     return beam_indices
 
 def autocorr_core(
+    pointing_spec : np.ndarray,
+    assign_pointing : str,
     DM: float,
     bbdata_a: BBData,
     t_a: np.ndarray,
@@ -60,7 +81,7 @@ def autocorr_core(
         The DM with which the zeroth pointing of the data is de-smeared before the final gating. for continuum sources, set dispersion measure to 0.
 
     bbdata_a : BBData object
-        At bare minimum, needs to have "tiedbeam_baseband" data of size (nfreq, npointing*npol, ntime).
+        At bare minimum, needs to have "tiedbeam_baseband" data of size (nfreq, nbeam, ntime).
 
     t_a : np.ndarray of int of shape (nfreq, npointing, nscan).
         start index of the integration, relative to bbdata_a['time0']['ctime'] in units of 2.56 microsec, as a function of frequency channels, pointing index, and time in units of :window: (i.e. scan number).
@@ -85,35 +106,35 @@ def autocorr_core(
     """
     n_freq = bbdata_a.nfreq
     n_scan = np.size(t_a, axis=-1)
-    n_pointings = bbdata_a["tiedbeam_baseband"].shape[1] // n_pol
+    n_pointings = len(pointing_spec)
 
     vis_shape = (n_freq, n_pointings, n_pol, n_pol, 2 * max_lag + 1, n_scan)
     auto_vis = np.zeros(vis_shape, dtype=bbdata_a["tiedbeam_baseband"].dtype)
     f0 = bbdata_a.index_map["freq"]["centre"]  # shape is (nfreq)
-
+    beam_indices = get_pointing_map(
+            tb_locations = bbdata_a['tiedbeam_locations'][:],
+            pointing_spec = pointing_spec,
+            mode = assign_pointing, 
+            tolerance_arcsec = 1.0)
     for kkpointing in range(n_pointings):
+        beam_idx = beam_indices[kkpointing] # assign a beam to the pointing
         for jjscan in range(n_scan):
             logging.info(f'Pointing {kkpointing+1}/{n_pointings}; Scan {jjscan+1}/{n_scan}')
             wij = int(window[kkpointing, jjscan])
             t_a_indices = t_a[:, kkpointing, jjscan]  # array of length 1024
             ## clip telescope A data ##
-            a_shape = list(
-                bbdata_a["tiedbeam_baseband"][
-                    :, kkpointing : kkpointing + n_pol, :
-                ].shape
-            )
-            a_shape[-1] = wij
+            a_shape = (bbdata_a["tiedbeam_baseband"].shape[0],2,wij)
             clipped_a = np.zeros(a_shape, dtype=bbdata_a["tiedbeam_baseband"].dtype) # clipped_a.shape = (n_freq, n_pointing * 2, w_ij)
             for i in range(len(t_a_indices)): # loop over frequency
                 for j in range(n_pol): # loop over pols
                     clipped_a[i, j, :] = getitem_zp1d(
-                        bbdata_a["tiedbeam_baseband"][i, 2 * kkpointing + j],
+                        bbdata_a["tiedbeam_baseband"][i, beam_idx + j],
                         t_a_indices[i],
                         t_a_indices[i] + wij,
                     )
 
             ######### intrachannel de-dispersion, vectorized over freq ###
-            scan_a_fs_cd = intrachannel_dedisp(clipped_a[:,2 * kkpointing: 2 * kkpointing + 2,:], DM[kkpointing], f0=f0)
+            scan_a_fs_cd = intrachannel_dedisp(clipped_a[:,beam_idx : beam_idx + 2,:], DM[kkpointing], f0=f0)
             r_jjscan = R[:, kkpointing, jjscan] # np array of size (nfreq)
 
             #### FFT correlation, vectorized over freq if possible ####
@@ -247,6 +268,7 @@ def fringestop_station(
     bbdata: BBData,
     bbdata_top: BBData,
     pointing_spec : np.ndarray,
+    assign_pointing : str,
     t_a: np.ndarray,
     window: np.ndarray,
     R: np.ndarray,
@@ -258,8 +280,6 @@ def fringestop_station(
     complex_conjugate_convention: int = -1,
     intra_channel_sign: int = 1,
     weight: Optional[np.ndarray] = None,
-    fast: bool = True,
-    assign_pointing = '1to1',
     max_frames: int = MAX_FRAC_SAMP_LENGTH,
 ) -> np.ndarray:
     """Returns fringestopped scans of data for a station of index station_index.
@@ -300,15 +320,15 @@ def fringestop_station(
         Either '1to1' or 'nearest': See documentation of get_pointing_map() 
 
     """
-
+    logging.info(f'Fringestopping station {station_index}')
     n_freq = len(bbdata_top.freq)
     n_scan = np.size(t_a, axis=-1)
-    n_pointings = bbdata["tiedbeam_baseband"].shape[1] // n_pol
+    n_pointings = len(pointing_spec)
     n_freq_B = len(bbdata.freq)
     assert (
         n_freq_B == n_freq
     ), f"There appear to be {n_freq} frequency channels in telescope A and {n_freq_B} frequency channels in telescope B. Please pass in these bbdata objects with frequency channels aligned (i.e. nth index along the frequency axis should correspond to the *same* channel in telescope A and B)"
-    bbdata_shape = (n_freq, bbdata["tiedbeam_baseband"].shape[1], n_scan, max(window.flatten()))
+    bbdata_shape = (n_freq, 2 * n_pointings, n_scan, max(window.flatten()))
     fringestopped_data = np.zeros(
         bbdata_shape, dtype=bbdata["tiedbeam_baseband"].dtype
     )  # zeropadded on edges of wij
@@ -354,7 +374,10 @@ def fringestop_station(
                 beam_idx = 2 * beam_idx, # factor of two because 2 pols
                 max_frames=max_frames,
             )
-            fringestopped_data[..., jjscan,:wij] = scan_fs
+            fringestopped_data[:,
+                               2 * kkpointing : 2 * kkpointing + 2, 
+                               jjscan,
+                               :wij] = scan_fs
     return fringestopped_data
 
 def crosscorr_core(
@@ -373,43 +396,26 @@ def crosscorr_core(
     complex_conjugate_convention: int = -1,
     intra_channel_sign: int = 1,
     weight: Optional[np.ndarray] = None,
-    fast: bool = True,
     max_frames: int = MAX_FRAC_SAMP_LENGTH,
 ) -> np.ndarray:
     """Fringestops, coherently dedisperses, and cross correlates data
     Parameters
     ----------
-    bbdata_a : BBData object
+    bbdata_a_fs : np.ndarray of shape (n_freq, 2 * n_pointing, n_scan, window_size)
         At bare minimum, needs to have "tiedbeam_baseband" data of size (nfreq, npointing*npol, ntime).
-    bbdata_b :
-        telescope B baseband data. Data must have matching index_map['freq'] as bbdata_a. index_map['freq']['centre'] must also be in MHz.
-    t_a : np.ndarray of int of shape (nfreq, npointing, nscan).
-        start index of the integration, relative to bbdata_a['time0']['ctime'] in units of 2.56 microsec, as a function of frequency channels, pointing index, and time in units of :window: (i.e. scan number).
 
-    window : np.ndarray of int of shape (npointing, nscan).
-        duration of the scan, in units of 2.56 microsec, as a function of pointing and time (i.e. scan number).
+    bbdata_b_fs : np.ndarray of shape (n_freq, 2 * n_pointing, n_scan, window_size)
+        telescope B baseband data. Data must have matching index_map['freq'] as bbdata_a. index_map['freq']['centre'] must also be in MHz.
+    f0 : np.ndarray of central channel frequencies -> intrachannel_dedisp
+
+    window : np.ndarray of ints of shape (n_freq, n_pointing, n_time)
+        duration of the scan, in units of 2.56 microsec, as a function of frequency & pointing and time (i.e. scan number).
 
     R : np.ndarray of float of shape (nfreq, npointing, nscan).
         Fraction R <= 1 of the scan, that gets down-selected before integration. In other words, we integrate between t_a + window // 2 +- r * window / 2
 
-    DM : float
+    DM : np.ndarray of float of shape (npointing,)
         The DM with which the zeroth pointing of the data is de-smeared before the final gating. for continuum sources, set dispersion measure to 0.
-
-    max_lag : int
-        maximum (absolute value) lag (in frames) for auto-correlation (useful for very long time series data). TODO: Outer layer of the code should check that this is less than 1/2 of the window size times R.
-        set this to 20 for a good balance between space efficiency and good noise statistics.
-
-    bbdata_top : BBData object
-        bbdata defining topocentric time, if not BBdata A
-
-    ref_frame : int
-        Index (e.g. index_A, index_B) corresponding to reference frame in which data will be fringestopped to. 0 corresponds to the geocenter. If None, will default to index_A.
-
-    n_pol : int
-        number of polarizations in data -- always 2.
-
-    pycalc_results :
-        pycalc11 Calc object, which is used to calculate geometric delays. Calc object should be initialized outside of this function and driver should have already been run (i.e. ci.run_driver())
 
     index_A :
         where telescope A corresponds to in pycalc_results.
@@ -420,8 +426,18 @@ def crosscorr_core(
     sample_rate :
         rate at which data is sampled in microseconds
 
-    n_pol :
-        number of polarizations
+    max_lag : int
+        maximum (absolute value) lag (in frames) for auto-correlation (useful for very long time series data). TODO: Outer layer of the code should check that this is less than 1/2 of the window size times R.
+        set this to 20 for a good balance between space efficiency and good noise statistics.
+
+    ref_frame : int
+        Index (e.g. index_A, index_B) corresponding to reference frame in which data will be fringestopped to. 0 corresponds to the geocenter. If None, will default to index_A.
+
+    n_pol : int
+        number of polarizations in data -- always 2.
+
+    pycalc_results :
+        pycalc11 Calc object, which is used to calculate geometric delays. Calc object should be initialized outside of this function and driver should have already been run (i.e. ci.run_driver())
 
     complex conjugate convention :
         should be a value of -1 if the baseband data is complex conjugated with respect to the sky, 1 otherwise
@@ -444,8 +460,8 @@ def crosscorr_core(
     """
     n_freq = bbdata_a_fs.shape[0]
     n_scan = np.size(R, axis=-1)
+    n_pointings = window.shape[0]
     # SA: basing this off of how the data is arranged now, may want to change
-    n_pointings = bbdata_a_fs.shape[1] // n_pol
     n_freq_B = bbdata_b_fs.shape[0]
     assert (
         n_freq_B == n_freq
@@ -546,7 +562,7 @@ def crosscorr_core(
 
 
 def getitem_zp1d(arr, start_want, stop_want):
-    """Acts like arr[start_want:stop_want] but assumes start is strictly less than stop.
+    """Slices a 1d np.array arr[start_want:stop_want] but assumes start is strictly less than stop.
 
     It returns output with the properties that
         1) width = stop_want - start_want
@@ -562,7 +578,9 @@ def getitem_zp1d(arr, start_want, stop_want):
         We zero-pad at the end of the output
     All in : start_have < start_want < stop_want < stop_have -- easy peasy.
 
-    TODO: make this work over a given axis of an arbitrary np.ndarray
+    Returns
+    -------
+    out : 1d np.ndarray of dtype arr.dtype of size stop_want - start_want.
     """
     width = int(stop_want - start_want)
     assert width >= 0, "Negative scan length not allowed; check your w_ij"
@@ -689,7 +707,9 @@ def intrachannel_dedisp(
     data: np.ndarray, DM: float, f0: np.ndarray, sample_rate: float = 2.56
 ) -> np.ndarray:
     """Intrachannel dedispersion: brings data to center of channel.
-    This is Eq. 5.17 of Lorimer and Kramer 2004 textbook, but ONLY the last term (proportional to f^2), not the other two terms (independent of f and linearly proportional to f respectively).
+    This is Eq. 5.17 of Lorimer and Kramer 2004 textbook.
+    Following the discussion in Leung 2024, ONLY the last term (proportional to f^2), 
+    not the other two terms (independent of f and linearly proportional to f respectively).
 
     Inputs:
     -------
