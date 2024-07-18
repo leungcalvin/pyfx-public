@@ -1144,7 +1144,7 @@ class CorrJob:
                 auto=auto_vis,
                 gate_spec = gate_this_station,
             )
-            sk=get_sk_rfi_mask(bbdata_a)
+            sk_values=get_sk_rfi_mask(bbdata_a)
             output[this_station.info.name].create_dataset('sk', data=sk_values)
             logging.info(f"Wrote autos for station {iistation}")
             del auto_vis # save memory
