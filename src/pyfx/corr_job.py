@@ -53,7 +53,7 @@ from pycalc11 import Calc
 from scipy.fft import fft, ifft, next_fast_len
 from scipy.interpolate import interp1d
 from scipy.stats import median_abs_deviation
-
+from pyfx.core_math import get_sk_rfi_mask
 from pyfx.bbdata_io import get_all_im_freq, get_all_time0, station_from_bbdata
 from pyfx.core_correlation_station import autocorr_core, crosscorr_core,fringestop_station
 
@@ -1101,6 +1101,7 @@ class CorrJob:
             this_station = self.telescopes[iistation]
             logging.info(f'Autos for {this_station}')
             bbdata_a = self.bbdatas[iistation]
+                        
             gate_this_station = np.empty(gate_spec.shape,dtype = gate_spec.dtype)
             gate_this_station['gate_start_frame'] = tij_frame[iistation]
             gate_this_station['gate_start_unix'] = tij_ctime[iistation]
@@ -1134,6 +1135,7 @@ class CorrJob:
 
             # ...and replace with nans afterward.
             #auto_vis = auto_vis + (auto_mask[:, :, None, None, None, :] * np.nan)
+
             output._from_ndarray_station(
                 event_id,
                 telescope=this_station,
@@ -1142,6 +1144,8 @@ class CorrJob:
                 auto=auto_vis,
                 gate_spec = gate_this_station,
             )
+            sk=get_sk_rfi_mask(bbdata_a)
+            output[this_station.info.name].create_dataset('sk', data=sk_values)
             logging.info(f"Wrote autos for station {iistation}")
             del auto_vis # save memory
         
