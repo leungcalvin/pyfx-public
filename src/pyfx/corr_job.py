@@ -416,7 +416,7 @@ class CorrJob:
             iifreq = np.argmin(np.abs(im_freq["centre"][:] - _f0))
             offset_mhz = im_freq["centre"][iifreq] - _f0
             logging.info(
-                "INFO: Offset between requested frequency and closest frequency: {offset_mhz} MHz"
+                f"Offset between requested frequency and closest frequency: {offset_mhz} MHz"
             )
         else:
             raise AssertionError("Please pass in t0f0: (astropy.Time,float) or t0f0: (astropy.Time,str) where f0='top' or 'bottom")
@@ -580,54 +580,18 @@ class CorrJob:
                     time_ordered=time_ordered,
                     return_ctimeo=False,
                 )
-            if time_spacing == "overlap2":
-                _tij1 = self._ti0_even_spacing(
+            if 'overlap' in time_spacing[:7]:
+                factor = int(time_spacing[7:])
+                logging.info(f'Generating scans overlapping by a factor of {factor}')
+                _tij = self._ti0_even_spacing(
                     t_i0,
-                    period_frames,
+                    np.array(period_frames // factor).astype(int),
                     num_scans_before=num_scans_before,
                     num_scans_after=num_scans_after,
                     time_ordered=time_ordered,
                     return_ctimeo=False,
                 )
-                _tij2 = self._ti0_even_spacing(
-                    t_i0 + int(0.5 * period_frames),
-                    period_frames,
-                    num_scans_before=num_scans_before,
-                    num_scans_after=num_scans_after,
-                    time_ordered=time_ordered,
-                    return_ctimeo=False,
-                )
-                _tij = np.concatenate(
-                    (_tij1, _tij2), axis=-1
-                )  # concatenate along time axis
-            if time_spacing == "overlap3":
-                _tij1 = self._ti0_even_spacing(
-                    t_i0,
-                    period_frames,
-                    num_scans_before=num_scans_before,
-                    num_scans_after=num_scans_after,
-                    time_ordered=time_ordered,
-                    return_ctimeo=False,
-                )
-                _tij2 = self._ti0_even_spacing(
-                    t_i0 + int(period_frames / 3),
-                    period_frames,
-                    num_scans_before=num_scans_before,
-                    num_scans_after=num_scans_after,
-                    time_ordered=time_ordered,
-                    return_ctimeo=False,
-                )
-                _tij3 = self._ti0_even_spacing(
-                    t_i0 + int(2 * period_frames / 3),
-                    period_frames,
-                    num_scans_before=num_scans_before,
-                    num_scans_after=num_scans_after,
-                    time_ordered=time_ordered,
-                    return_ctimeo=False,
-                )
-                _tij = np.concatenate(
-                    (_tij1, _tij2, _tij3), axis=-1
-                )  # concatenate along time axis
+            
         
         window = np.atleast_1d(window)
         assert np.issubdtype(
@@ -854,7 +818,7 @@ class CorrJob:
         )
         # this makes the scan number corresponding to ti0 come first in the array: e.g. if the on-pulse comes in the 5th scan period, the t_ij array is ordered as (5,6,7,...0,1,2,3,4)
         if time_ordered:  # this makes the scans time-ordered, e.g. 0,1,2,3,...8,9.
-            scan_numbers = sorted(scan_numbers)
+            scan_numbers = np.sort(scan_numbers)
         tij = (
             ti0[:, :, None] + scan_numbers[None, None, :] * period_frames[None, :, None]
         )
@@ -921,19 +885,25 @@ class CorrJob:
             x_rplus = x_mid + (x_end - x_start) * 0.5 * r[:, pointing, iiscan]
             plt.fill_betweenx(x1=x_start, x2=x_end, y=y / fscrunch, alpha=0.15)
             if iiscan == 0:
-                linestyle = "-"
+                plt.plot(
+                    x_start,
+                    y / fscrunch,
+                    linestyle='-',
+                    color="black",
+                    label="window",
+                    lw=1,
+                )  # shade t
             else:
-                linestyle = "--"
+                plt.plot(
+                    x_start,
+                    y / fscrunch,
+                    linestyle='--',
+                    color="black",
+                    lw=1,
+                )  # linestyle = "--"
+
             plt.plot(
-                x_start,
-                y / fscrunch,
-                linestyle=linestyle,
-                color="black",
-                label="window",
-                lw=1,
-            )  # shade t
-            plt.plot(
-                x_end, y / fscrunch, linestyle=linestyle, color="black", lw=1
+                x_end, y / fscrunch, linestyle='--', color="black", lw=1
             )  # shade t + w
             if bad_rfi_channels is not None:
                 for channel in bad_rfi_channels:
@@ -949,7 +919,8 @@ class CorrJob:
             plt.plot(
                 x_rplus, y / fscrunch, linestyle="-.", color="red", lw=1
             )  # shade t + w/2 + r/2
-            plt.legend(loc="lower right")
+            plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.05),
+          ncol=2)
 
             xmin = np.nanmin(gate_start_frame[:, pointing, :], axis=-1) / (tscrunch)
             xmax = np.nanmax(gate_start_frame[:, pointing, :], axis=-1) / (tscrunch)
@@ -1079,8 +1050,8 @@ class CorrJob:
         cross_corr : bool
             If True, calculate all cross-correlations. If the empty list is passed, will skip.
         """
-
-
+        self.max_lag = max_lag
+        
         tij_ctime, tij_ctime_offset, tij_frame = self.tij_other_stations(
             gate_spec=gate_spec)
 
