@@ -47,20 +47,35 @@ def fft_corr(w1: np.ndarray, w2: np.ndarray, axis=-1) -> np.ndarray:
     # out[1:n//2] contains positive lags, out[n//2+1] contains negative lags"
     return ifft(fft(w1, axis=axis) * fft(w2, axis=axis).conj(), axis=axis)
 
-
 def basic_correlator(
-    w1, w2, max_lag=None, channelization=CHANNELIZATION, full_output=False
+    w1, w2, max_lag=None, ds = False, channelization=CHANNELIZATION, full_output=False
 ):
-    """Basic correlator."""
+    """Basic correlator, downsamples the visibilities if ds = True."""
     if max_lag is None:
         max_lag = channelization["nlags"]
-    cross_corr_func = fft_corr(w1, w2)
-    if full_output:
-        frame_lags = fftfreq(cross_corr_func.shape[-1]) * cross_corr_func.shape[-1]
-        return cross_corr_func, frame_lags
-    return max_lag_slice(cross_corr_func, max_lag=max_lag, lag_axis=-1)
+    spec = fft(w1, axis=-1) * fft(w2, axis=-1).conj()
 
-
+    if not ds:
+        return max_lag_slice(ifft(spec,axis = -1), 
+                         max_lag=max_lag, 
+                         lag_axis=-1)
+    else:
+        ds_factor = spec.shape[-1] // max_lag // 4
+        specsize_rounded = ds_factor * max_lag * 4
+        new_shape = list(spec.shape[:-1]) + [max_lag * 4,ds_factor]
+        new_shape_half = list(spec.shape[:-1]) + [max_lag * 2,ds_factor]
+        print(f'downsampling visibilities by {ds_factor}')
+        spec_reshape = np.empty(new_shape,dtype = spec.dtype)
+        spec_reshape[...,0:max_lag * 2,:] = np.reshape(spec[...,0:specsize_rounded // 2],new_shape_half) # positive half of spectrum
+        spec_reshape[...,-max_lag * 2:,:] = np.reshape(spec[...,-specsize_rounded // 2:],new_shape_half) # neg half of spectrum
+        spec_ds = np.mean(np.reshape(spec[...,:specsize_rounded],new_shape),axis = -1)
+        return max_lag_slice(ifft(spec_ds,axis = -1),
+                         max_lag=max_lag,
+                         lag_axis=-1)
+        spec_ds = np.mean(np.reshape(spec[...,:specsize_rounded],new_shape),axis = -1)
+        return max_lag_slice(ifft(spec_ds,axis = -1), 
+                         max_lag=max_lag, 
+                         lag_axis=-1)
 def inverse_variance_weight_correlator(
     w1, w2, max_lag=None, channelization=CHANNELIZATION, full_output=False
 ):
