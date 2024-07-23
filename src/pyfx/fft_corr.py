@@ -19,9 +19,6 @@ SIG_SEARCH_KERNEL = np.zeros(
     (len(CHANNELIZATION["search_lags"]), 2 * CHANNELIZATION["ntap"] - 1)
 )
 for ii, subframe_delay in enumerate(CHANNELIZATION["search_lags"]):
-    print(
-        f'Precomputing delay-search PFB coefficients: {ii} of {len(CHANNELIZATION["search_lags"])}'
-    )
     SIG_SEARCH_KERNEL[ii, :] = pfb.pfb_window_auto_corr(
         IVW_LAGS * CHANNELIZATION["lblock"] - subframe_delay, CHANNELIZATION
     )
