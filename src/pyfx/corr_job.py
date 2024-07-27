@@ -47,6 +47,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from astropy.time import Time, TimeDelta
 from baseband_analysis.core import BBData
+from baseband_analysis.core.dedispersion import coherent_dedisp
 from baseband_analysis.core.sampling import _scrunch, fill_waterfall
 from coda.core import VLBIVis
 from pycalc11 import Calc
@@ -352,6 +353,13 @@ class CorrJob:
                 self.ref_ctime_offset = this_bbdata["time0"]["ctime_offset"]
             if this_bbdata.nfreq < 1024:
                 fill_waterfall(this_bbdata, write=True)
+            coherent_dedisp(
+                data=this_bbdata, DM=0, time_shift=False, write=True
+            )  # reset DM to 0
+            if "DM" in this_bbdata["tiedbeam_baseband"].attrs:
+                assert (
+                    this_bbdata["tiedbeam_baseband"].attrs["DM"] == 0
+                ), "Correlating pre-dedispersed data is not supported."
 
         earliest_start_unix = int(earliest_start_unix - 1)  # buffer
         duration_min = 3  # max(int(np.ceil(int(latest_end_unix - earliest_start_unix + 1.0 )/60)),1)

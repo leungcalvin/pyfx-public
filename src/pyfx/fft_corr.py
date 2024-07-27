@@ -47,7 +47,12 @@ def fft_corr(w1: np.ndarray, w2: np.ndarray, axis=-1) -> np.ndarray:
 def basic_correlator(
     w1, w2, max_lag=None, ds = False, channelization=CHANNELIZATION, full_output=False
 ):
-    """Basic correlator, downsamples the visibilities if ds = True."""
+    """Basic correlator, downsamples the visibilities if ds = True.
+    
+    Using ds = True does not completely pass pytests yet.
+    I'm disabling to make sure we don't lose any sensitivity for now;
+    However it can decrease runtime by ~30%. -CL
+    """
     if max_lag is None:
         max_lag = channelization["nlags"]
     spec = fft(w1, axis=-1) * fft(w2, axis=-1).conj()
