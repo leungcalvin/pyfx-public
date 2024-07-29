@@ -938,11 +938,11 @@ class CorrJob:
             plt.ylabel(f"Freq ID (0-1023) / {fscrunch:0.0f}")
             plt.xlabel(f"Time ({tscrunch:0.1f} frames)")
             if hasattr(out_file, '__len__'):
-+               plt.savefig(out_file[iiscan], bbox_inches="tight")
-+               plt.close()
-+           else:
-+               plt.savefig(out_file, bbox_inches="tight")
-+        plt.close()
+                plt.savefig(out_file[iiscan], bbox_inches="tight")
+                plt.close()
+            else:
+                plt.savefig(out_file, bbox_inches="tight")
+         plt.close()
 
         del bbdata_A
         return f
