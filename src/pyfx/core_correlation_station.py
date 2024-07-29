@@ -23,7 +23,7 @@ from pyfx.fft_corr import (
 K_DM = 1 / 2.41e-4  # in s MHz^2 / (pc cm^-3)
 MAX_FRAC_SAMP_LENGTH = 32187  # maximum FFT length, chosen to keep delay rate drift (on Earth) within 1/10th of a frame
 
-def get_pointing_map(pointing_spec,tb_locations,mode = '1to1',tolerance_arcsec = 10,ties_ok = False):
+def get_pointing_map(pointing_spec,tb_locations,mode = '1to1',tolerance_arcsec = 300,ties_ok = False):
     """Assign pointings to beam indices.
 
     Parameters
@@ -114,8 +114,7 @@ def autocorr_core(
     beam_indices = get_pointing_map(
             tb_locations = bbdata_a['tiedbeam_locations'][:],
             pointing_spec = pointing_spec,
-            mode = assign_pointing, 
-            tolerance_arcsec = 1.0)
+            mode = assign_pointing)
     for kkpointing in range(n_pointings):
         beam_idx = beam_indices[kkpointing] # assign a beam to the pointing
         for jjscan in range(n_scan):
@@ -336,8 +335,7 @@ def fringestop_station(
     beam_indices = get_pointing_map(
         tb_locations = bbdata['tiedbeam_locations'][:],
         pointing_spec = pointing_spec,
-        mode = assign_pointing, 
-        tolerance_arcsec = 1.0)
+        mode = assign_pointing)
     for kkpointing in range(n_pointings):
         beam_idx = beam_indices[kkpointing] # assign a beam to the pointing
         for jjscan in range(n_scan):
