@@ -220,7 +220,6 @@ def test_continuum_calibrator():
             pointing_spec = pointing_spec,
             t_a=t_a,
             window=window,
-            R=np.ones((1024,1,1)),
             pycalc_results=ci,
             station_index=iistation,
             ref_frame=0,

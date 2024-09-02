@@ -270,7 +270,6 @@ def fringestop_station(
     assign_pointing : str,
     t_a: np.ndarray,
     window: np.ndarray,
-    R: np.ndarray,
     pycalc_results: Calc,
     station_index: int,
     ref_frame: int,
@@ -294,9 +293,6 @@ def fringestop_station(
     
     window : np.ndarray of int of shape (1024, n_pointing, n_scan)
         Duration of scans
-    
-    R : np.ndarray of float of shape (1024, n_pointing, n_scan)
-        Part of the scan over which we integrate
     
     station_index : int
         The index of the station to be fringestopped, to be used by pycalc.

@@ -423,9 +423,10 @@ class CorrJob:
         elif isinstance(_f0, float): #numpy64 will fail on this -> type(_f0) is float:  # use the number as the reference freq
             iifreq = np.argmin(np.abs(im_freq["centre"][:] - _f0))
             offset_mhz = im_freq["centre"][iifreq] - _f0
-            logging.info(
-                f"Offset between requested frequency and closest frequency: {offset_mhz} MHz"
-            )
+            if offset_mhz!=0:
+                logging.info(
+                    f"Offset between requested frequency and closest frequency: {offset_mhz} MHz"
+                )
         else:
             raise AssertionError("Please pass in t0f0: (astropy.Time,float) or t0f0: (astropy.Time,str) where f0='top' or 'bottom")
         f0 = im_freq["centre"][iifreq]  # the actual reference frequency in MHz.
@@ -518,10 +519,12 @@ class CorrJob:
         time_spacing="even",
         window=1000,
         r_ij=np.ones(1024),
+        dm_scan=None,
         num_scans_before=10,
         num_scans_after=8,
         time_ordered=False,
         period_frames=1000,
+        verbose=True,
     ):
         """
         Tells the correlator when to start integrating, how long to start integrating, for each station. Run this after the CorrJob() is instantiated.
@@ -549,7 +552,12 @@ class CorrJob:
         kwargs : 'dm' and 'f0', 'pdot','wi'
         """
         period_frames = np.atleast_1d(period_frames)
-        dm = self.pointing_spec["dm_correlator"]
+        if dm_scan is None:
+            dm = self.pointing_spec["dm_correlator"]
+        else:
+            if verbose:
+                logging.info("will use input dm to determine scan (at some point this should be fixed...)")
+            dm = dm_scan 
         bbdata_ref = self.bbdatas[self.ref_index]
 
         # First: if t0f0 is a bunch of strings, then get t0 & f0 from the BBData.
@@ -622,9 +630,10 @@ class CorrJob:
                 "INFO: Using TOA mode: shifting all scans to be centered on t_ij"
             )
 
-        logging.info(
-            "Success: generated a valid set of integrations! Rounding to nearest 2.56us to create topocentric gate specification."
-        )
+        if verbose:
+            logging.info(
+                "Success: generated a valid set of integrations! Rounding to nearest 2.56us to create topocentric gate specification."
+            )
         t_ij = self.frame2atime(int_frames=_tij) # (n_freq, n_pointing)
 
         gate_spec = np.empty(_tij.shape, dtype=VLBIVis._dataset_dtypes["time"])
@@ -862,7 +871,10 @@ class CorrJob:
         vmin=0,
         vmax=1,
         xpad=None,
+        ax_to_plot=None,
+        ax=None,
         out_file: Optional[str] = None,
+        close:bool=True,
         bad_rfi_channels=None,
     ):
         gate_start_frame = gate_spec['gate_start_frame']
@@ -875,25 +887,25 @@ class CorrJob:
             tscrunch = int((np.median(w) // 10))
         sww = _scrunch(wwfall, fscrunch=fscrunch, tscrunch=tscrunch)
         del wwfall
-
+        
         y = np.arange(1024)
-        f = plt.figure()
+        if ax is None:
+            f = plt.figure()
+            ax=f.gca()
+        waterfall = sww[:, pointing] + sww[:, pointing + 1]
+        waterfall -= np.nanmedian(waterfall)
+        ax.imshow(
+            waterfall, aspect="auto", vmin=vmin, vmax=vmax, interpolation="none"
+        )
         for iiscan in range(gate_start_frame.shape[-1]):
-            waterfall = sww[:, pointing] + sww[:, pointing + 1]
-            waterfall -= np.nanmedian(waterfall)
-            plt.imshow(
-                waterfall, aspect="auto", vmin=vmin, vmax=vmax, interpolation="none"
-            )
-
             x_start = gate_start_frame[:, pointing, iiscan] / (tscrunch)
-
             x_end = x_start + w[:,pointing, iiscan] / tscrunch
             x_mid = x_start + (x_end - x_start) * 0.5
             x_rminus = x_mid - (x_end - x_start) * 0.5 * r[:, pointing, iiscan]
             x_rplus = x_mid + (x_end - x_start) * 0.5 * r[:, pointing, iiscan]
-            plt.fill_betweenx(x1=x_start, x2=x_end, y=y / fscrunch, alpha=0.15)
+            ax.fill_betweenx(x1=x_start, x2=x_end, y=y / fscrunch, alpha=0.15)
             if iiscan == 0:
-                plt.plot(
+                ax.plot(
                     x_start,
                     y / fscrunch,
                     linestyle='-',
@@ -902,7 +914,7 @@ class CorrJob:
                     lw=1,
                 )  # shade t
             else:
-                plt.plot(
+                ax.plot(
                     x_start,
                     y / fscrunch,
                     linestyle='--',
@@ -910,13 +922,13 @@ class CorrJob:
                     lw=1,
                 )  # linestyle = "--"
 
-            plt.plot(
+            ax.plot(
                 x_end, y / fscrunch, linestyle='--', color="black", lw=1
             )  # shade t + w
             if bad_rfi_channels is not None:
                 for channel in bad_rfi_channels:
-                    plt.axhline(channel / fscrunch, color="gray", alpha=0.25)
-            plt.plot(
+                    ax.axhline(channel / fscrunch, color="gray", alpha=0.25)
+            ax.plot(
                 x_rminus,
                 y / fscrunch,
                 linestyle="-.",
@@ -924,27 +936,24 @@ class CorrJob:
                 label="integration",
                 lw=1,
             )  # shade t + w/2 - r/2
-            plt.plot(
+            ax.plot(
                 x_rplus, y / fscrunch, linestyle="-.", color="red", lw=1
             )  # shade t + w/2 + r/2
-            plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.05),
-          ncol=2)
+            
 
             xmin = np.nanmin(gate_start_frame[:, pointing, :], axis=-1) / (tscrunch)
             xmax = np.nanmax(gate_start_frame[:, pointing, :], axis=-1) / (tscrunch)
             if xpad is not None:
-                plt.xlim(np.nanmedian(xmin) - xpad, np.nanmedian(xmax) + xpad)
-            plt.ylim(1024 / fscrunch, 0)
-            plt.ylabel(f"Freq ID (0-1023) / {fscrunch:0.0f}")
-            plt.xlabel(f"Time ({tscrunch:0.1f} frames)")
-            if hasattr(out_file, '__len__'):
-                plt.savefig(out_file[iiscan], bbox_inches="tight")
-                plt.close()
-            else:
-                plt.savefig(out_file, bbox_inches="tight")
-         plt.close()
-
-        del bbdata_A
+                ax.set_xlim(np.nanmedian(xmin) - xpad, np.nanmedian(xmax) + xpad)
+        ax.set_ylim(1024 / fscrunch, 0)
+        ax.set_ylabel(f"Freq ID (0-1023) / {fscrunch:0.0f}")
+        ax.set_xlabel(f"Time ({tscrunch:0.1f} frames)")
+        #ax.legend(loc='upper center', bbox_to_anchor=(0.5, 1.05),ncol=2)
+        f=ax.get_figure()
+        if out_file is not None:
+            f.savefig(out_file, bbox_inches="tight")
+        if close:
+            plt.close(f)
         return f
 
     def tij_other_stations(self, gate_spec):
@@ -1161,13 +1170,218 @@ class CorrJob:
                 pointing_spec = self.pointing_spec,
                 t_a=tij_frame_top,
                 window=w_ij,
-                R=r_ij,
                 pycalc_results=self.pycalc_results,
                 station_index=iistation,
                 ref_frame=ref_index,
                 assign_pointing = assign_pointing, # use 1to1 for DM refinement trials or calibrator survey; use 'nearest' for correlator-repointing run.
             ) # bbdata_fs.shape = (nfreq, npointing, nscan, scan_width)
         
+        # correlate all N^2 baselines
+        for iioutrigger in cross_corr: # 
+            f0 = bbdata_ref.index_map["freq"]["centre"]  # shape is (nfreq)
+            assert (f0 == self.bbdatas[iioutrigger].index_map['freq']['centre']).all(), f"Mismatched frequencies between station 0 & station {iioutrigger}! Run fill_waterfall() on both to fix"
+            vis_shape = (bbdata_ref.nfreq, n_pointings, n_pol, n_pol, 2 * max_lag + 1, n_scan)
+            # loops over scans are within crosscorr_core
+            cross = crosscorr_core(
+                bbdata_a_fs=fringestopped_stations[ref_index],
+                bbdata_b_fs=fringestopped_stations[iioutrigger],
+                window=w_ij,
+                R=r_ij,
+                f0=f0,
+                DM=dm,
+                index_A=ref_index,
+                index_B=iioutrigger,
+                max_lag=self.max_lag,
+                ref_frame=ref_index,
+            )
+            tij_ctime_a = tij_ctime[ref_index]  # extract start frame for station
+            tij_ctime_b = tij_ctime[iioutrigger]  # extract start frame for station
+            avg_ctime = (tij_ctime[ref_index] + tij_ctime[iioutrigger]) * 0.5
+            avg_ctimeo = (tij_ctime_offset[ref_index] + tij_ctime_offset[iioutrigger]) * 0.5
+            gate_this_baseline = np.empty(gate_spec.shape,dtype = gate_spec.dtype)
+            gate_this_baseline['gate_start_unix'] = avg_ctime
+            gate_this_baseline['gate_start_unix_offset'] = avg_ctimeo
+            gate_this_baseline['gate_start_frame'] = -1000000000000 # no meaningful frame count for baseline group! sentinel value should preclude use in most scenarios
+            gate_this_baseline['duration_frames'] = gate_spec['duration_frames']
+            gate_this_baseline['dur_ratio'] = gate_spec['dur_ratio']
+            output._from_ndarray_baseline(
+                event_id=event_id,
+                pointing_spec=self.pointing_spec,
+                telescope_a=self.telescopes[ref_index],
+                telescope_b=self.telescopes[iioutrigger],
+                cross=cross,
+                gate_spec = gate_this_baseline,
+            )
+
+            logging.info(f"Wrote visibilities for baseline {self.tel_names[ref_index]}-{self.tel_names[iioutrigger]}")
+            del cross
+        if clear_bbdata:
+            del self.bbdatas # free up space in memory
+            del fringestopped_stations
+
+        if type(out_h5_file) is str:
+            output.save(out_h5_file)
+            logging.info(f"Wrote visibilities to disk: ls -l {out_h5_file}")
+        return output
+
+
+
+    def run_correlator_job_param_trials(
+        self,
+        event_id,
+        gate_spec,
+        max_lag=100,
+        out_h5_file=None,
+        auto_corr = True,
+        cross_corr = True,
+        assign_pointing = '1to1',
+        clear_bbdata = True,
+    ):
+        """Run auto- and cross- correlations.
+        All BBData are read in at once and ordered using fill_waterfall.
+        Loops over stations, does autos.
+        Then loops over stations, does fringestopping.
+        Then loops over outrigger stations only, cross-correlates baselines.
+
+        This works well on short baseband dumps, but is quite costly RAM-wise since everything is read in at the beginning.
+
+        Parameters
+        ----------
+        event_id : int
+            For writing VLBIVis metadata.
+        gate_spec : np.ndarray
+            Of start times as a function of (n_freq, n_pointing, n_time)
+        max_lag : int
+            Maximum lag.
+        out_h5_file : string
+            Absolute path to .h5 including the extension
+        auto_corr: bool
+            If True, calculate all autocorrelations. If the empty list is passed, will skip.
+        cross_corr : bool
+            If True, calculate all cross-correlations. If the empty list is passed, will skip.
+        """
+        logging.info("warning, this is still in development")
+        self.max_lag = max_lag
+        tij_ctime, tij_ctime_offset, tij_frame = self.tij_other_stations(
+            gate_spec=gate_spec)
+
+        ref_index = self.ref_index
+        bbdata_ref = self.bbdatas[self.ref_index]
+        tij_frame_top = tij_frame[self.ref_index]
+        n_pointings = len(self.pointing_spec)
+        n_scan = np.size(tij_frame_top, axis=-1)
+        n_pol = 2
+        w_ij = gate_spec["duration_frames"][0]  # (npointing, nscan)
+        r_ij = gate_spec["dur_ratio"]  # (nfreq, npointing, nscan)
+        dm = self.pointing_spec["dm_correlator"]
+        output = VLBIVis()
+        if auto_corr == False:
+            auto_corr = []
+        elif auto_corr == True: # do all stations
+            auto_corr = np.arange(len(self.bbdatas))
+
+        for iia in auto_corr:
+            assert iia < len(self.bbdatas)
+
+        if cross_corr == True: # do all baselines with CHIME x outrigger station, enumerated by their pycalc index
+            cross_corr = np.arange(1,len(self.bbdatas))
+        assert max(cross_corr) < len(self.bbdatas)
+
+        stations_to_fringestop = set(cross_corr) # from cross_corr, figure out which stations need to be fringestopped
+        stations_to_fringestop.add(ref_index) # also need to fringestop ref station
+        stations_to_fringestop = list(stations_to_fringestop)
+        stations_to_fringestop.sort()
+
+        for iistation in auto_corr:
+            this_station = self.telescopes[iistation]
+            logging.info(f'Autos for {this_station}')
+            bbdata_a = self.bbdatas[iistation]
+                        
+            gate_this_station = np.empty(gate_spec.shape,dtype = gate_spec.dtype)
+            gate_this_station['gate_start_frame'] = tij_frame[iistation]
+            gate_this_station['gate_start_unix'] = tij_ctime[iistation]
+            gate_this_station['gate_start_unix_offset'] = tij_ctime_offset[iistation]
+            gate_this_station['duration_frames'] = gate_spec['duration_frames'] 
+            gate_this_station['dur_ratio'] = gate_spec['dur_ratio']
+            tij_frame_this_station = tij_frame[iistation]
+            # there are scans with missing data: check the start and end index
+            # ...but we just let the correlator correlate
+            auto_mask = (tij_frame_this_station < 0) + (
+                tij_frame_this_station + w_ij > bbdata_a.ntime
+            )
+            np.clip(
+                tij_frame_this_station,
+                0,
+                bbdata_a.ntime - w_ij,
+                out=tij_frame_this_station,
+            )
+            logging.info(
+                f"Calculating autos for station {iistation}; {np.sum(auto_mask)}/{auto_mask.size} scans out of bounds"
+            )
+            auto_vis = autocorr_core(
+                pointing_spec = self.pointing_spec, 
+                assign_pointing = assign_pointing,
+                DM=dm,
+                bbdata_a=bbdata_a,
+                t_a=tij_frame_this_station,
+                window=w_ij,
+                R=r_ij,
+                max_lag=self.max_lag,
+                n_pol=2,
+            )
+
+            # ...and replace with nans afterward.
+            #auto_vis = auto_vis + (auto_mask[:, :, None, None, None, :] * np.nan)
+
+            output._from_ndarray_station(
+                event_id,
+                telescope=this_station,
+                pointing_spec=self.pointing_spec,
+                bbdata=bbdata_a,
+                auto=auto_vis,
+                gate_spec = gate_this_station,
+            )
+            sk_values=get_sk_rfi_mask(bbdata_a)
+            output[this_station.info.name].create_dataset('sk', data=sk_values)
+            logging.info(f"Wrote autos for station {iistation}")
+            del auto_vis # save memory
+        
+        # fringestop all relevant stations
+        fringestopped_stations = np.zeros((len(stations_to_fringestop), 1024, n_pointings * 2, n_scan, np.max(w_ij.flatten())),dtype = self.bbdatas[0]['tiedbeam_baseband'][:].dtype)
+        for iistation in stations_to_fringestop:
+            self.bbdatas[iistation]["tiedbeam_baseband"][:] = np.nan_to_num(
+                self.bbdatas[iistation]["tiedbeam_baseband"][:], nan=0, posinf=0, neginf=0
+            )
+            ### the right thing to do is to fringestop entire dump in scans of ~10ms
+            ### then clip data using trials over tij_frame_top and window
+            shape=np.array(tij_frame_top.shape)
+            shape[-1]=1
+            shape=tuple(shape)
+            tij_now=np.zeros(shape,dtype=tij_frame_top.dtype)
+            w_ij_now=np.ones(w_ij.shape,dtype=w_ij.dtype)
+            w_ij_now[:]=bbdata_ref.ntime
+            fs_station = fringestop_station(
+                bbdata=self.bbdatas[iistation],
+                bbdata_top=bbdata_ref,
+                pointing_spec = self.pointing_spec,
+                t_a=tij_now,#tij_frame_top,
+                window=w_ij_now,#w_ij,
+                pycalc_results=self.pycalc_results,
+                station_index=iistation,
+                ref_frame=ref_index,
+                assign_pointing = assign_pointing, # use 1to1 for DM refinement trials or calibrator survey; use 'nearest' for correlator-repointing run.
+            ) # bbdata_fs.shape = (nfreq, npointing, nscan, scan_width)
+
+            #### this is where we shuld actually be zero padding
+            for freq in range(fringestopped_stations.shape[1]):
+                for pointing in range(fringestopped_stations.shape[2]//2):
+                    for scan in range(fringestopped_stations.shape[3]):
+                        start=tij_frame_top[freq,pointing,scan]
+                        stop=start+w_ij[pointing,scan]
+                        out=fs_station[freq,2*pointing:pointing*2+2,0,start:stop]
+                        n_frames=out.shape[-1]
+                        fringestopped_stations[iistation,freq,2*pointing:pointing*2+2,scan,:n_frames] = out
+
         # correlate all N^2 baselines
         for iioutrigger in cross_corr: # 
             f0 = bbdata_ref.index_map["freq"]["centre"]  # shape is (nfreq)

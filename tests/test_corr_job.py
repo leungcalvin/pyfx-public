@@ -87,6 +87,20 @@ def test_corr_job_runs_filled_multiple_phase_centers():
         assert (vis['chime']['auto'][:,ii] == vis['chime']['auto'][:,0]).all(), "CHIME Auto not identical?"
         assert (vis['kko']['auto'][:,ii] == vis['kko']['auto'][:,0]).all(), "KKO Auto not identical?"
 
+    ## do again for the version optimized for multiscans 
+    vis = ncp_job.run_correlator_job_param_trials(#ncp_job.run_correlator_job(
+        event_id=256150292,
+        gate_spec=gate_spec,
+        out_h5_file=False,
+        auto_corr = True,
+        assign_pointing = 'nearest', # nearest for multiple phase centers
+    )
+    for ii in range(num_pointings):
+        assert (vis['chime-kko']['vis'][:,ii] == vis['chime-kko']['vis'][:,0]).all(), "CHIME-KKO Cross not identical?"
+        assert (vis['chime']['auto'][:,ii] == vis['chime']['auto'][:,0]).all(), "CHIME Auto not identical?"
+        assert (vis['kko']['auto'][:,ii] == vis['kko']['auto'][:,0]).all(), "KKO Auto not identical?"
+
+
 def test_corr_job_runs_no_fill():
     """Same as the above, but no fill_waterfall"""
     chime_bbdata = BBData.from_file(chime_file)
@@ -166,7 +180,7 @@ def test_continuum_calibrator_corrjob():
     # tt,ww,rr=get_tw_frame_continuum(ss_job.bbdatas[0],pad=0)
     # tt_station=[tt,tt] # ¯\_(ツ)_/¯ only matters for autos
 
-    vis = ss_job.run_correlator_job(
+    vis = ss_job.run_correlator_job_param_trials(#ss_job.run_correlator_job(
         event_id=304295669,
         gate_spec=gate_spec,
         out_h5_file=False,
