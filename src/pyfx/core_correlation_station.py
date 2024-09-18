@@ -56,7 +56,7 @@ def get_pointing_map(pointing_spec,tb_locations,mode = '1to1',tolerance_arcsec =
         for iipointing, pointing in enumerate(pointing_spec):
             seps_this_pointing = SkyCoord(ra = pointing['corr_ra'],dec = pointing['corr_dec'],unit = 'deg').separation(beam_sc).to_value('arcsec')
             min_dist = min(seps_this_pointing)
-            assert min_dist < tolerance_arcsec
+            assert min_dist < tolerance_arcsec, f"{min_dist} is larger than {tolerance_arcsec}"
             if not ties_ok:
                 assert np.sum(seps_this_pointing  == min_dist) == 1, "Two exactly equidistant pointings! Not allowed."
             beam_indices.append(2 * np.argmin(min_dist))

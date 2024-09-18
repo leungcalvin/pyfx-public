@@ -871,7 +871,6 @@ class CorrJob:
         vmin=0,
         vmax=1,
         xpad=None,
-        ax_to_plot=None,
         ax=None,
         out_file: Optional[str] = None,
         close:bool=True,
@@ -1326,6 +1325,72 @@ class CorrJob:
                 t_a=tij_frame_this_station,
                 window=w_ij,
                 R=r_ij,
+                max_lag=self.max_lag,
+                n_pol=2,
+            )
+
+            # ...and replace with nans afterward.
+            #auto_vis = auto_vis + (auto_mask[:, :, None, None, None, :] * np.nan)
+
+            output._from_ndarray_station(
+                event_id,
+                telescope=this_station,
+                pointing_spec=self.pointing_spec,
+                bbdata=bbdata_a,
+                auto=auto_vis,
+                gate_spec = gate_this_station,
+            )
+            sk_values=get_sk_rfi_mask(bbdata_a)
+            output[this_station.info.name].create_dataset('sk', data=sk_values)
+            logging.info(f"Wrote autos for station {iistation}")
+            del auto_vis # save memory
+        
+
+        ## always get sk mask, even if not calculating autos over all scans
+        logging.info("getting sk mask")
+        for iistation in np.arange(len(self.bbdatas)):
+            this_station = self.telescopes[iistation]
+            logging.info(f'Autos for {this_station}')
+            bbdata_a = self.bbdatas[iistation]
+                        
+            shape=np.array(gate_spec.shape)
+            shape[-1]=1 #cheating
+            shape=tuple(shape)
+
+            gate_this_station = np.empty(shape,dtype = gate_spec.dtype)
+            gate_this_station['gate_start_frame'][...,0] = tij_frame[iistation,...,0]
+            gate_this_station['gate_start_unix'][...,0] = tij_ctime[iistation,...,0]
+            gate_this_station['gate_start_unix_offset'][...,0] = tij_ctime_offset[iistation,...,0]
+            gate_this_station['duration_frames'][...,0] = gate_spec['duration_frames'][...,0]
+            gate_this_station['dur_ratio'][...,0] = gate_spec['dur_ratio'][...,0]
+            tij_frame_this_station = gate_this_station['gate_start_frame']
+            # there are scans with missing data: check the start and end index
+            # ...but we just let the correlator correlate
+            shape=np.array(w_ij.shape)
+            shape[-1]=1
+            shape=tuple(shape)
+            w_ij_this_station=np.empty(shape,dtype = w_ij.dtype)
+            w_ij_this_station[...,0]=w_ij[...,0]
+            auto_mask = (tij_frame_this_station < 0) + (
+                tij_frame_this_station + w_ij_this_station > bbdata_a.ntime
+            )
+            np.clip(
+                tij_frame_this_station,
+                0,
+                bbdata_a.ntime - w_ij_this_station,
+                out=tij_frame_this_station,
+            )
+            logging.info(
+                f"Calculating autos for station {iistation}; {np.sum(auto_mask)}/{auto_mask.size} scans out of bounds"
+            )
+            auto_vis = autocorr_core(
+                pointing_spec = self.pointing_spec, 
+                assign_pointing = assign_pointing,
+                DM=dm,
+                bbdata_a=bbdata_a,
+                t_a=tij_frame_this_station,
+                window=w_ij_this_station,
+                R=np.ones(tij_frame_this_station.shape),
                 max_lag=self.max_lag,
                 n_pol=2,
             )
