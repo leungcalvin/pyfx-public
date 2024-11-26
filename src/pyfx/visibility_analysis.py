@@ -1,9 +1,11 @@
 """A module which performs simple functions on visibilities. This module is meant to be used on *visibility* data"""
+import time
+
 import numpy as np
-from scipy.fft import fft, ifft, next_fast_len,fftfreq
 import torch
 import torch.fft as torch_fft
-import time
+from scipy.fft import fft, fftfreq, ifft, next_fast_len
+
 
 def extract_subframe_delay(
     data: np.ndarray,
