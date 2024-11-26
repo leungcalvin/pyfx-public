@@ -15,9 +15,9 @@ Natively supports frequency-dependent pulsar gates, and coherent dedispersion.
 You will also need `pycalc` and you probably will need `coda`. Use `main` branch for both.
 
 ## Usage
-You will want to set up a `CorrJob` to handle the correlation over all possible baselines. The `CorrJob` will specify the correlation start and stop times as a function of frequency, time, and pointing at a given reference station in three arrays of shape $(nfreq (fixed to 1024), npointing, ntime)$. In most cases you will have only one pointing, but for widefield VLBI you might want multiple pointings.
-1) $t$, a `float64`, which specifies topocentric Unix time 
-2) $w$, an `int`, which specifies the total width of the integration (<0.5 seconds)
+You will want to set up a `CorrJob` to handle the correlation over all possible baselines. The `CorrJob` will specify the correlation start and stop times as a function of frequency, time, and pointing at a given reference station in three arrays of shape `(nfreq=1024, npointing, ntime)`. In most cases you will have only one pointing, but for widefield VLBI you might want multiple pointings.
+1) $t$, an `astropy.Time`, which specifies topocentric Unix time at the reference station.
+2) $w$, an `int`, which specifies the scan duration. This effectively sets the frequency resolution of the correlation to be $390 * w$ kHz.
 3) $r$, a `float` between 0-1 which specifies the fraction over the integration to correlate (used in pulsar gating mode), centered on `t + 2.56e-6 * w//2`.
 
 ```python
@@ -53,22 +53,27 @@ You will want to set up a `CorrJob` to handle the correlation over all possible 
     # analysis and calibration of visibilities follows hereafter -- see `coda` repo
 ```
 
-If you want to be janky you can directly run `crosscorr_core()` or `autocorr_core()` and accomplish similar things without the `CorrJob` layer
+If you want to do stuff under the hood, you can directly run `crosscorr_core()` or `autocorr_core()` and accomplish similar things without the `CorrJob` interface layer.
 
 # HDF5 Baseband Data Format Specification
-An ideal data format to hold baseband data used in `pyfx` would be 1) easily interpretable by end users and manipulated with custom Python 3 analysis tools, and 2) easily used in established VLBI correlators like `DiFX` and `SFXC`. Unfortunately such a data format does not exist. Baseband data produced by the full-array baseband systems on ICE-based telescopes are saved to `.h5` files, which are then processed by offline (and later, real-time) beamformers using CHIME/FRB's `singlebeam`  or `multibeam` formats, whose data ordering reflects CHIME's FX correlator architecture. The format specification for `singlebeam` data as used by `pyfx` is summarized here. 
+One of the reasons we developed `pyfx` was for native support of the strange data format of CHIME. Since we are working at low frequencies where the DM sweep is long, we need to record the baseband data at reasonably high frequency resolution to follow the long DM sweep. This means we use lots of channels (1024) and no sub-bands, since CHIME directly digitizes the voltage data without using a local oscillator to mix signals down to baseband. These data are saved to `.h5` files, which are then processed by offline (and later, real-time) beamformers. The format specification for `singlebeam` data as used by `pyfx` is summarized here. 
 
-To open `singlebeam` files one can either use `h5py` directly. We discourage this; instead use something like:
+To open `singlebeam` files one can use `h5py` directly to get started. However, slicing data in `pyfx` requires using the `BBData` data format specified in CHIME's `baseband_analysis` repo.
 
 ```python
 from baseband\_analysis.core import BBData
 data_all_freqs = BBData.from_file('/path/to/baseband_EVENTID_*.h5') # to load all frequencies
 data_first_beam = BBData.from_file('/path/to/baseband_EVENTID_*.h5',beam_sel = [0,1]) # to load all frequencies, just one dual-pol beam
+print(data_all_freqs.index_map['freq']['centre']) # what frequency channels do we have?
+print(data_all_freqs['tiedbeam_locations'][:]) # what pointings do we have?
+print(list(data_all_freqs.keys())) # what metadata do we have?
 data_first_three_freqs_explicit = BBData.from_file(['/path/to/baseband_EVENTID_0.h5','/path/to/baseband_EVENTID_1.h5','/path/to/baseband_EVENTID_3.h5']) # to load data from FPGA freq_ids = 0,1,3 explicitly
 data_first_three_freqs_implicit = BBData.from_file('/path/to/baseband_EVENTID_*.h5',freq_sel = [0,1,2]) # to load data implicitly from the first three files available
 ```
 
-As one can see, `caput.memh5` does the I/O management under the hood for us, allowing downselection along arbitrary axes. `BBData.from_file` also:
+As one can see, `caput.memh5` does the I/O management under the hood for us, allowing downselection along arbitrary axes (e.g. `freq_sel` as shown above, but `beam_sel` or `time_sel` also can be used). 
+
+`BBData.from_file` also:
 * Handles the offset encoding of raw baseband data (4 real + 4 imaginary), 
 * Metadata which keep track of sign flips in the complex conjugate convention taken by the beamformer upstream, changing the sign convention when the data are loaded into memory.
 A complete `singlebeam` file should have data and metadata attributes as described below, and `multibeam` files are quite closely related. \textbf{Bolded} refers to features that do not exist or are irrelevant for \texttt{singlebeam} files, but which would be a natural way to extend the data format for the pulsar beam data.
@@ -86,28 +91,28 @@ A complete `singlebeam` file should have data and metadata attributes as describ
     4) `data['tiedbeam_locations']['ra','dec', or 'pol']` : array of shape $(N_p)$ where $N_p$ is even holds the sky locations and polarizations used to phase up each station. It will also include `data['tiedbeam_locations']['X_400MHz','Y_400MHz']` which refer to local beam-model coordinates done via the `beam_model` package.
     5) `data['centroid']` Holds the position of the telescope's effective centroid, measured from (0,0,0) in local telescope coordinates, in meters,  measured in either a Easting/Northing coordinate system (TONE) or in a $F_\perp,F_\parallel$ coordinate system (perpendicular or parallel to the focal line) as a function of frequency channel. This is a function of frequency because the telescope's centroid is a sensitivity-weighted average of antenna positions (Post-beamforming). This is not yet used in VLBI, but we have the machinery to perform small baseline corrections using this field if necessary.
     6) data['telescope'].attrs['name'] (Not implemented yet?) Holds the name of the station (`chime', `pathfinder', `tone', `allenby', or `greenbank', or `hatcreek')  (Kenzie please update?)
+
 # HDF5 Visibilities Data Format Specification
-
 CHIME Outriggers will have a small number of stations collecting full-array baseband dumps and forming multiple synthesized beams. Since each baseline must be correlated and calibrated independently, we store each baseline and each station as its own independent HDF5 group within a HDF5 container (again inherited from `caput`) called `VLBIVis`. Each station group contains station-related metadata copied from the `singlebeam` data (via `coda.core.VLBIVis.copy_station_metadata`, which copies all attributes stored in the `BBData` to its corresponding station HDF5 group.
-The station groups also hold autocorrelation visibilities up to some maximum lag (20 * 2.56 us by default), while each baseline holds per-baseline (e.g. calibration) metadata and cross-correlation visibilities. For example, processing data from CHIME and KKO would result in two autocorrelation HDF5 groups (`vis['chime']`, `vis['tone']`,), and one cross-correlation HDF5 group `vis['chime-kko']` (baselines are alphabetically organized, which has the advantage that `chime` is always station A.
+The station groups also hold autocorrelation visibilities up to some maximum lag (20 * 2.56 us by default), while each baseline holds per-baseline (e.g. calibration) metadata and cross-correlation visibilities. For example, processing data from CHIME and KKO would result in two autocorrelation HDF5 groups (`vis['chime']`, `vis['kko']`,), and one cross-correlation HDF5 group `vis['chime-kko']` (not `kko-chime`, since we alphabetize the two stations in a baseline).
 
-The cross-correlation visibilities, stored in `vis['chime-tone']['vis']` are packed in `np.ndarray`s of shape $(N_\nu, N_{c}, N_{p}, N_{p},N_{\ell},N_t)$. The axes are as follows:
+The cross-correlation visibilities, stored in `vis['chime-gbo']['vis']` are packed in `np.ndarray`s of shape $(N_k, N_{c}, N_{p}, N_{p},N_{\ell},N_t)$. The axes are as follows:
 
-1) $N_b$ denotes the number of baselines. In CHIME Outriggers, we only consider baselines involving CHIME (no outrigger-outrigger baselines) for now. This simplifies the accounting and computation because one never has to compensate each dataset in $N-1$ different ways. 
-2) $N_\nu$ enumerates the number of frequency channels. Because fringe-finding involves taking Fourier transforms over the frequency axis, this is fixed to 1024 for now, and infilled with zeros where frequency channels are corrupted by e.g. RFI.
-3) $N_{c} \lesssim10$ enumerates the number of correlation phase centers. Usually one or several ($<10$) phase centers will be used per beam, but `difxcalc` can be compiled to supports many ($\approx 250$ before I ran into weird bugs). Currently, we can assign a single (or multiple) VLBI "pointing" to each tied-array "beam" whose width is $0.25 \times 0.25$ degrees, in anticipation of science cases for assigning multiple VLBI pointings per synthesized beam (which a tracking beam may have the sensitivity to see).
-4) $N_p \times N_p$ indicates all possible combinations of antenna polarizations. There are two antenna polarizations for each telescope, and they will be labeled ``south'' and ``east'' to denote ``parallel to the cylinder axis'' and ``perpendicular to the cylinder axis'' directions respectively. Since CHIME/FRB Outriggers have co-aligned, dual-polarization antennas, correlating in a linear basis is straightforward and removes the need for polarization calibration.
-5) $N_{\ell} \sim 20$ indicates the number of integer time lags saved (in units of $\SI{2.56}{\us}$). In principle, only a few ($<10$) are needed, but it is not difficult to compute and save roughly 20 integer lags, which also allows for some post-correlation frequency upchannelization if desired (e.g. for high rotation measure or diffractive scintillation analysis)
-6) $N_{t} \sim 10^{1-4}$ for FRB baseband data enumerates the number of off-pulses correlated in order to estimate the statistical error on the on-pulse visibilities. However, for a 30-second long tracking beam integration with thousands of short pulse windows centered on individual pulsar pulses, $N_{t}$ can approach $\approx 10^4$ for a long pulsar integration.
+1) $N_k$ enumerates the number of frequency channels. Since we have a preference for working at the native frequency resolution of CHIME, this is fixed to 1024 for now, and infilled with zeros where frequency channels are corrupted by e.g. RFI. We always correlate at high frequency resolution, but this information is contained in the lag axis, which is easy to downselect if we don't mind binning the visibilities in frequency.
+2) $N_{c} \lesssim10$ enumerates the number of correlation phase centers. Usually one or several ($<10$) phase centers will be used per beam. We use the `pycalc` wrapper around `difxcalc11` to evaluate delays. Currently, we can assign a single (or multiple) VLBI "pointing" to each tied-array "beam" whose width is $0.25 \times 0.25$ degrees, in anticipation of science cases for assigning multiple VLBI pointings per synthesized beam (which a tracking beam may have the sensitivity to see).
+3) $N_p \times N_p$ indicates all possible combinations of antenna polarizations. There are two antenna polarizations for each telescope, and they will be labeled ``south'' and ``east'' to denote ``parallel to the cylinder axis'' and ``perpendicular to the cylinder axis'' directions respectively. Since CHIME/FRB Outriggers have co-aligned, dual-polarization antennas, correlating in a linear basis is straightforward and removes the need for polarization calibration.
+4) $N_{\ell} \sim 100$ indicates the number of integer time lags saved (in units of $\SI{2.56}{\us}$). In principle, only a few ($<10$) are needed, but it is not difficult to compute and save roughly 100 integer lags, which also allows for some post-correlation upchannelization of the visibilities.
+5) $N_{t} \sim 10^{1-4}$ enumerates successive scans. At the time of this writing we work with short scans (< 1 second), but pending upgrades to the beamformers at each station, we will soon be able to record hundreds of seconds of beamformed data at each station. In that case $N_{t}$ might approach $\approx 10^4$ in a long observation.
 
 In addition to the visibilities we also save the following metadata. At the time of cross-correlation, two `singlebeam` (or `multibeam`) files are processed to produce one visibility dataset. In addition to the metadata in both inputted \texttt{singlebeam} files (as described above) we will save...
 
 1) Software metadata -- `github` commit hash denoting what version of the correlator produced the file.
 2) `vis['chime']['time_a']`:  The topocentric start time of each integration at each station to nanosecond precision (see `BBData['time0']`) as a function of frequency and time.
-3) `vis['chime-tone']['vis'].attrs['station_a','station_b']`: `Astropy.EarthLocation` objects denoting the geocentric `(X,Y,Z)` positions of the stations fed into `difxcalc11`
+3) `vis['chime-kko']['vis'].attrs['station_a','station_b']`: `Astropy.EarthLocation` objects denoting the geocentric `(X,Y,Z)` positions of the stations fed into `difxcalc11`
 4) `vis['chime-kko']['vis'].attrs['calibrated']`: a boolean attribute denoting whether phase + delay calibration has been applied to the visibilities via `coda.calibration.apply_phase_cal`.
-5) `vis['chime-tone']['vis'].attrs['clock_jitter_corrected']` and `['clock_drift_corrected']` refer to whether one-second timescale clock jitter (between the GPS and maser) has been calibrated out, and weeks-long timescale clock drift (between masers at two stations) has been calibrated out using the CHIME/FRB `maser` pipeline. Use `coda.clock.apply_clock_jitter` and `coda.clock.apply_clock_drift` to apply/unapply these corrections.
+5) `vis['chime-kko']['vis'].attrs['clock_jitter_corrected']` and `['clock_drift_corrected']` refer to whether one-second timescale clock jitter (between the GPS and maser) has been calibrated out, and weeks-long timescale clock drift (between masers at two stations) has been calibrated out using the CHIME/FRB `maser` pipeline. Use `coda.clock.apply_clock_jitter` and `coda.clock.apply_clock_drift` to apply/unapply these corrections.
 
-# Maintainers/Developers/Sufferers
+# Maintainers/Developers
+Developing a VLBI correlator brings enlightenment to radio interferometrists. Please contact one of us with suggestions for improvements, or questions about the documentation. PRs are very welcome!
 Calvin Leung
 Shion Andrew
