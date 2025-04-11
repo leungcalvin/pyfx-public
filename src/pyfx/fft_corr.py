@@ -22,8 +22,16 @@ for ii, subframe_delay in enumerate(CHANNELIZATION["search_lags"]):
     SIG_SEARCH_KERNEL[ii, :] = pfb.pfb_window_auto_corr(
         IVW_LAGS * CHANNELIZATION["lblock"] - subframe_delay, CHANNELIZATION
     )
-CHANNELIZATION["IVW_KERNEL"] = IVW_KERNEL
-CHANNELIZATION["SIG_SEARCH_KERNEL"] = SIG_SEARCH_KERNEL
+
+# Normalize weights so that noise RMS is preserved at all delays within a correlator variant).
+IVW_KERNEL = IVW_KERNEL #/ np.sum(np.convolve(IVW_KERNEL,IVW_KERNEL)**2)
+delay_norm = np.sum(SIG_SEARCH_KERNEL**2,axis = -1)[:,None]
+delay_norm = delay_norm / delay_norm[0]
+SIG_SEARCH_KERNEL = SIG_SEARCH_KERNEL / delay_norm
+print('Normalizing kernel coefficients')
+
+CHANNELIZATION["IVW_KERNEL"] = IVW_KERNEL 
+CHANNELIZATION["SIG_SEARCH_KERNEL"] = SIG_SEARCH_KERNEL 
 
 
 def fft_corr(w1: np.ndarray, w2: np.ndarray, axis=-1) -> np.ndarray:
