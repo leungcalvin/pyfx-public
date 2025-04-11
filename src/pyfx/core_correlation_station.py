@@ -149,7 +149,6 @@ def autocorr_core(
                             basic_correlator(
                                 scan_a_fs_cd[:, pol_0, start:stop],
                                 scan_a_fs_cd[:, pol_1, start:stop],
-                                max_lag=max_lag,
                             )
                         )
                         """auto_vis[:, kkpointing, pol_0, pol_1,:,jjscan] = np.concatenate(
@@ -167,7 +166,6 @@ def autocorr_core(
                                     basic_correlator(
                                         scan_a_fs_cd[iifreq, pol_0, start:stop],
                                         scan_a_fs_cd[iifreq, pol_1, start:stop],
-                                        max_lag=max_lag,
                                     )
                                 )
                                 """auto_vis[:, kkpointing, pol_0, pol_1,:,jjscan] = np.concatenate(
@@ -513,7 +511,6 @@ def crosscorr_core(
                                 basic_correlator(
                                     scan_a_fs_cd[:, pol_0, start:stop],
                                     scan_b_fs_cd[:, pol_1, start:stop],
-                                    max_lag=max_lag,
                                 )
                             )
                             # cross_vis[:, kkpointing, pol_0, pol_1,:,jjscan] = np.concatenate(
@@ -547,7 +544,6 @@ def crosscorr_core(
                                     basic_correlator(
                                         scan_a_fs_cd[freq, pol_0, start:stop],
                                         scan_b_fs_cd[freq, pol_1, start:stop],
-                                        max_lag=max_lag,
                                     )
                                 )
                                 # cross_vis[freq, kkpointing, pol_0, pol_1, :,jjscan] = np.concatenate(
